@@ -200,6 +200,20 @@ pub(crate) fn derive_child_template(input: &mut syn::DeriveInput) -> syn::Result
       tokens.extend(quote! {
         #vis struct #builder #g_impl #g_where(Option<#name #g_ty>);
 
+        impl #g_impl Declare for #name #g_ty #g_where {
+          type Builder = #builder #g_ty;
+          #[inline]
+          fn declarer() -> Self::Builder { #builder::default() }
+        }
+
+        impl #g_impl ObjDeclarer for #builder #g_ty {
+          type Target = Self;
+          #[inline]
+          fn finish(self) -> Self { self }
+        }
+
+        impl #g_impl ChildOfCompose for #builder #g_ty {}
+
         impl #g_impl Default for #builder #g_ty #g_where {
           fn default() -> Self {
             Self(None)

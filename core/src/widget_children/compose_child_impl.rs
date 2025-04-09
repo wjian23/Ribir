@@ -211,11 +211,26 @@ impl<T> Template for Vec<T> {
   fn builder() -> Self::Builder { VecBuilder(vec![]) }
 }
 
+impl<T> Declare for Vec<T> {
+  type Builder = VecBuilder<T>;
+  #[inline]
+  fn declarer() -> Self::Builder { VecBuilder(vec![]) }
+}
+
+impl<T> ObjDeclarer for VecBuilder<T> {
+  type Target = Self;
+
+  #[inline]
+  fn finish(self) -> Self::Target { self }
+}
+
 impl<T> TemplateBuilder for VecBuilder<T> {
   type Target = Vec<T>;
   #[inline]
   fn build_tml(self) -> Self::Target { self.0 }
 }
+
+pub type KeyVec<T> = Vec<(Option<Key>, T)>;
 
 impl<T> ComposeChildFrom<VecBuilder<T>, 1> for Vec<T> {
   #[inline]
@@ -249,6 +264,24 @@ where
     self
       .0
       .push(T::builder().with_child(child).build_tml());
+    self
+  }
+}
+
+impl<'w, C, T, const N: usize, const M: usize> ComposeWithChild<'w, C, false, 2, N, M>
+  for VecBuilder<(Option<Key>, T)>
+where
+  T: Template,
+  T::Builder: ComposeWithChild<'w, C, false, 1, N, M>,
+  <T::Builder as ComposeWithChild<'w, C, false, 1, N, M>>::Target: TemplateBuilder<Target = T>,
+{
+  type Target = Self;
+
+  #[inline]
+  fn with_child(mut self, child: C) -> Self::Target {
+    self
+      .0
+      .push((None, T::builder().with_child(child).build_tml()));
     self
   }
 }

@@ -51,10 +51,12 @@ pub type MenuEvent = CustomEvent<MenuEventData>;
 /// # use ribir::prelude::*;
 /// let w = fn_widget! {
 ///   let sub_menu = MenuControl::new(menu! {
-///     @MenuItem {
-///       @ Leading::new( @Icon { @ { svgs::MENU } })
-///       @ { "sub_menu" }
-///     }
+///     @ [
+///       @MenuItem {
+///         @ Leading::new( @Icon { @ { svgs::MENU } })
+///         @ { "sub_menu" }
+///       }
+///     ]
 ///   });
 ///   let menu = MenuControl::new(menu! {
 ///     on_custom_concrete_event: move |e: &mut MenuEvent| {
@@ -340,6 +342,8 @@ impl MenuControl {
       }
     }
   }
+
+  pub fn clear(&self) { self.0.borrow_mut().items.clear(); }
 }
 
 fn anchor_around(target: Rect) -> impl FnMut(Widget<'static>) -> Widget<'static> {
@@ -401,6 +405,8 @@ pub struct MenuItem<'w> {
   /// sub menu
   sub_menu: Option<MenuControl>,
 }
+
+impl<'w> ChildOfCompose for MenuItemBuilder<'w> {}
 
 impl<'w> MenuItem<'w> {
   fn into_widget(self) -> Widget<'w> {
@@ -540,9 +546,9 @@ fn wrap_menu_item<'w>(w: Widget<'w>, key: CowArc<str>, menu: &MenuControl) -> Wi
   .into_widget()
 }
 
-impl<'w> ComposeChild<'w> for Menu {
-  type Child = Vec<MenuChild<'w>>;
-  fn compose_child(_: impl StateWriter<Value = Self>, child: Self::Child) -> Widget<'w> {
+impl ComposeChild<'static> for Menu {
+  type Child = PipeKeyVec<MenuChild<'static>>;
+  fn compose_child(_: impl StateWriter<Value = Self>, child: Self::Child) -> Widget<'static> {
     fn_widget! {
       @Column {
         class: MENU,
@@ -576,12 +582,18 @@ impl<'w> ComposeChild<'w> for Menu {
         },
         @ {
           let menu = Provider::of::<MenuControl>(BuildCtx::get()).expect("Menu must in MenuControl");
-          child.into_iter().map(move |w| match w {
-            MenuChild::Item(w) => {
-              let key = w.label.clone();
-              wrap_menu_item(w.into_widget(), key, &menu)
-            },
-            MenuChild::Divider(w) => w.into_divider_widget(),
+          child.map(move |it| {
+            let menu = menu.clone();
+            move || {
+              menu.clear();
+              it.into_iter().map(move |(_, w)| match w {
+                MenuChild::Item(w) => {
+                  let key = w.label.clone();
+                  wrap_menu_item(w.into_widget(), key, &menu)
+                },
+                MenuChild::Divider(w) => w.into_divider_widget(),
+              })
+            }
           })
         }
       }
@@ -646,7 +658,7 @@ mod tests {
         }
       },
       @MenuItem { @ { "Item 1" } }
-        @MenuItem { @ { "Item 2" } }
+      @MenuItem { @ { "Item 2" } }
     });
 
     let mut wnd: TestWindow = TestWindow::new(fn_widget! { @Void {} });
@@ -694,8 +706,9 @@ mod tests {
           @ { "Item 1" }
           @ { sub_menu.clone() }
         }
-
+        @MenuDivider{}
         @MenuItem { @ { "Item 2" } }
+
     });
 
     let mut wnd: TestWindow = TestWindow::new(fn_widget! { @Void {} });

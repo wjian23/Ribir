@@ -62,7 +62,7 @@ impl From<&str> for Key {
 ///         move || {
 ///           $items.clone().into_iter().map(move |item| {
 ///             @KeyWidget {
-///               key: item.id as isize,
+///               key: Some(Key::Number(item.id as isize)),
 ///               @ { item.into_lazy_widget() }
 ///             }
 ///           })
@@ -75,16 +75,11 @@ impl From<&str> for Key {
 /// ```
 #[simple_declare(stateless)]
 pub struct KeyWidget {
-  pub(crate) key: Key,
+  pub(crate) key: Option<Key>,
 }
 
 impl KeyWidget {
-  pub fn with_child<'c, const M: usize, W>(self, child: W) -> (Key, Widget<'c>)
-  where
-    W: IntoWidget<'c, M>,
-  {
-    (self.key, child.into_widget())
-  }
+  pub fn with_child<W>(self, child: W) -> (Option<Key>, W) { (self.key, child) }
 }
 
 #[cfg(test)]
@@ -120,7 +115,7 @@ mod tests {
             move || {
               $items_reader.clone().into_iter().map(move |id| {
                 @KeyWidget {
-                  key: id as isize,
+                  key: Some(Key::Number(id as isize)),
                   @Void {
                     on_mounted: move |_| {$mounts.write().push(id);}
                   }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::pipe::{InnerPipe, PipeKeyWidget, PipeWidget};
+use crate::pipe::{InnerPipe, PipeKeyWidget, PipeWidget, ValuePipe};
 
 pub struct MultiPair<'a> {
   pub(crate) parent: Widget<'static>,
@@ -157,5 +157,271 @@ impl<'w> IntoWidget<'w, RENDER> for MultiPair<'w> {
   fn into_widget(self) -> Widget<'w> {
     let MultiPair { parent, children } = self;
     Widget::new(parent, children)
+  }
+}
+
+pub type PipeVec<T> = Box<dyn Pipe<Value = Box<dyn Iterator<Item = T>>>>;
+pub type PipeKeyVec<T> = Box<dyn Pipe<Value = Box<dyn Iterator<Item = (Option<Key>, T)>>>>;
+
+macro_rules! impl_pipe_vec_with_child_static {
+  ($is_writer:expr, $tml_num:expr, $arg_num:expr) => {
+    impl<'w, T, W: 'static, const M: usize>
+      ComposeWithChild<'w, T, $is_writer, $tml_num, $arg_num, M> for PipeVecBuilder<W>
+    where
+      VecBuilder<W>:
+        ComposeWithChild<'w, T, $is_writer, $tml_num, $arg_num, M, Target = VecBuilder<W>>,
+    {
+      type Target = Self;
+
+      fn with_child(self, child: T) -> Self::Target {
+        let v = self
+          .inner
+          .unwrap_or(InnerPipeVecBuilder::Vec(Vec::builder()));
+        let v = match v {
+          InnerPipeVecBuilder::Vec(v) => InnerPipeVecBuilder::Vec(v.with_child(child)),
+          InnerPipeVecBuilder::Pipe(_) => panic!("PipeVec can't have pipe value and other mix!"),
+        };
+
+        PipeVecBuilder { inner: Some(v) }
+      }
+    }
+  };
+
+  ($is_writer:expr, $tml_num:expr) => {
+    impl<'w, T, W: 'static, const N: usize, const M: usize>
+      ComposeWithChild<'w, T, $is_writer, $tml_num, N, M> for PipeVecBuilder<W>
+    where
+      VecBuilder<W>: ComposeWithChild<'w, T, $is_writer, $tml_num, N, M, Target = VecBuilder<W>>,
+    {
+      type Target = Self;
+
+      fn with_child(self, child: T) -> Self::Target {
+        let v = self
+          .inner
+          .unwrap_or(InnerPipeVecBuilder::Vec(Vec::builder()));
+        let v = match v {
+          InnerPipeVecBuilder::Vec(v) => InnerPipeVecBuilder::Vec(v.with_child(child)),
+          InnerPipeVecBuilder::Pipe(_) => panic!("PipeVec can't have pipe value and other mix!"),
+        };
+
+        PipeVecBuilder { inner: Some(v) }
+      }
+    }
+  };
+}
+
+impl_pipe_vec_with_child_static!(false, 1, 0);
+impl_pipe_vec_with_child_static!(false, 1, 1);
+impl_pipe_vec_with_child_static!(false, 1, 2);
+impl_pipe_vec_with_child_static!(false, 2);
+
+impl<'w, T, W: 'static, D, const M: usize> ComposeWithChild<'w, T, false, 1, 3, M>
+  for PipeVecBuilder<W>
+where
+  T: Pipe<Value = D>,
+  D: IntoIterator + 'static,
+  W: ComposeChildFrom<D::Item, M>,
+{
+  type Target = Self;
+
+  fn with_child(self, child: T) -> Self::Target {
+    assert!(self.inner.is_none());
+
+    PipeVecBuilder {
+      inner: Some(InnerPipeVecBuilder::Pipe(Box::new(child.map(|v| {
+        Box::new(v.into_iter().map(W::compose_child_from)) as Box<dyn Iterator<Item = W>>
+      })))),
+    }
+  }
+}
+
+impl<'w, T, W: 'static, C, const M: usize> ComposeWithChild<'w, T, false, 1, 4, M>
+  for PipeVecBuilder<W>
+where
+  T: Pipe<Value = C>,
+  C: IntoChildCompose<Vec<W>, M>,
+{
+  type Target = Self;
+
+  fn with_child(self, child: T) -> Self::Target {
+    assert!(self.inner.is_none());
+
+    PipeVecBuilder {
+      inner: Some(InnerPipeVecBuilder::Pipe(Box::new(
+        child.map(|v| Box::new(v.into_child_compose().into_iter()) as Box<dyn Iterator<Item = W>>),
+      ))),
+    }
+  }
+}
+
+impl<T> ChildOfCompose for PipeVec<T> {}
+
+impl<T: 'static> ComposeChildFrom<PipeVecBuilder<T>, 1> for PipeVec<T> {
+  #[inline]
+  fn compose_child_from(from: PipeVecBuilder<T>) -> Self { from.build_tml() }
+}
+
+enum InnerPipeVecBuilder<V> {
+  Pipe(Box<dyn Pipe<Value = Box<dyn Iterator<Item = V>>>>),
+  Vec(VecBuilder<V>),
+}
+
+impl<V: 'static> InnerPipeVecBuilder<V> {
+  fn into_pipe(self) -> Box<dyn Pipe<Value = Box<dyn Iterator<Item = V>>>> {
+    match self {
+      InnerPipeVecBuilder::Pipe(p) => p,
+      InnerPipeVecBuilder::Vec(v) => {
+        Box::new(ValuePipe::new(Box::new(v.build_tml().into_iter()) as Box<dyn Iterator<Item = V>>))
+      }
+    }
+  }
+}
+
+pub struct PipeVecBuilder<T> {
+  inner: Option<InnerPipeVecBuilder<T>>,
+}
+
+impl<T: 'static> TemplateBuilder for PipeVecBuilder<T> {
+  type Target = PipeVec<T>;
+  fn build_tml(self) -> Self::Target { self.inner.unwrap().into_pipe() }
+}
+
+impl<T: 'static> Template for PipeVec<T> {
+  type Builder = PipeVecBuilder<T>;
+  fn builder() -> Self::Builder { PipeVecBuilder { inner: None } }
+}
+
+#[cfg(test)]
+mod tests {
+
+  use super::*;
+  use crate::test_helper::MockMulti;
+
+  #[test]
+  fn compile_dyn_key_vec() {
+    #[derive(Declare)]
+    struct Multi {}
+
+    impl ComposeChild<'static> for Multi {
+      type Child = PipeKeyVec<Widget<'static>>;
+      fn compose_child(_: impl StateWriter<Value = Self>, _: Self::Child) -> Widget<'static> {
+        unimplemented!()
+      }
+    }
+
+    let _ = fn_widget! {
+      let v = PipeKeyVec::<Widget<'static>>::builder();
+      v.with_child((0..3).map(|i|
+        @KeyWidget {
+          key: Some(Key::Number(i as isize)),
+          @ { @Void {}.into_widget() }
+        }
+      ));
+
+      let cnt = Stateful::new(3);
+      @MockMulti {
+        @Multi {
+          @Void {}
+          @Void {}
+        }
+        @Multi {
+          @KeyWidget{
+            key: None,
+            @Void {}
+          }
+          @KeyWidget{
+            key: None,
+            @Void {}
+          }
+        }
+        @Multi {
+          @{
+            let w = pipe!(*$cnt)
+              .map(move |cnt| {
+                @KeyVec::<Widget<'static>> {
+                  @ { (0..cnt).map(|_| @KeyWidget {key: None, @Void {} }) }
+                }
+            });
+            w
+          }
+        }
+
+        @Multi {
+          @{
+            pipe!(*$cnt)
+              .map(move |cnt| {
+                let it = (0..cnt).map(|i|
+                @KeyWidget {
+                  key: Some(Key::Number(i as isize)),
+                  @ { @Void {}.into_widget() }
+                }
+              );
+              it
+            })
+          }
+        }
+      }
+    };
+  }
+
+  #[test]
+  fn compile_dyn_vec() {
+    #[derive(Declare)]
+    struct Multi {}
+
+    impl ComposeChild<'static> for Multi {
+      type Child = PipeVec<Widget<'static>>;
+      fn compose_child(_: impl StateWriter<Value = Self>, _: Self::Child) -> Widget<'static> {
+        unimplemented!()
+      }
+    }
+
+    let _ = fn_widget! {
+      let cnt = Stateful::new(3);
+
+      @MockMulti {
+        @Multi {
+          @Void {}
+          @Void {}
+        }
+        @Multi {
+          @{
+            pipe!(*$cnt)
+              .map(move |cnt| (0..cnt).map(|_| @Void {}))
+          }
+        }
+      }
+    };
+  }
+
+  #[test]
+  fn compile_dyn_vec_of_template() {
+    #[allow(dead_code)]
+    #[derive(Template)]
+    struct TmlEmbed {
+      text: TextInit,
+    }
+    #[allow(dead_code)]
+    #[derive(Template)]
+    enum Tml {
+      Widget(Widget<'static>),
+      Embed(TmlEmbed),
+    }
+
+    #[derive(Declare)]
+    struct Multi {}
+
+    impl ComposeChild<'static> for Multi {
+      type Child = PipeVec<Tml>;
+      fn compose_child(_: impl StateWriter<Value = Self>, _: Self::Child) -> Widget<'static> {
+        unimplemented!()
+      }
+    }
+    let _ = fn_widget! {
+      @Multi {
+        @ TmlEmbed { @ { "123"} }
+        @ TmlEmbed { @ { "123"} }
+      }
+    };
   }
 }

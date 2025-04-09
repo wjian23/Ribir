@@ -30,6 +30,30 @@ impl<'a, const M: usize, T: IntoWidget<'a, M>> ComposeChildFrom<T, M> for Widget
   fn compose_child_from(from: T) -> Widget<'a> { from.into_widget() }
 }
 
+impl<const M: usize, W, T: ComposeChildFrom<W, M>> ComposeChildFrom<W, M> for (Option<Key>, T)
+where
+  W: ChildOfCompose,
+{
+  #[inline(always)]
+  fn compose_child_from(from: W) -> (Option<Key>, T) { (None, from.into_child_compose()) }
+}
+
+impl<'a, const M: usize, T: ComposeChildFrom<Widget<'a>, M>> ComposeChildFrom<Widget<'a>, M>
+  for (Option<Key>, T)
+{
+  #[inline(always)]
+  fn compose_child_from(from: Widget<'a>) -> (Option<Key>, T) { (None, from.into_child_compose()) }
+}
+
+impl<const M: usize, W, T: ComposeChildFrom<W, M>> ComposeChildFrom<(Option<Key>, W), M>
+  for (Option<Key>, T)
+{
+  #[inline(always)]
+  fn compose_child_from((key, from): (Option<Key>, W)) -> (Option<Key>, T) {
+    (key, from.into_child_compose())
+  }
+}
+
 impl<W, C: ComposeChildFrom<T, M>, T, const M: usize> ComposeChildFrom<Pair<W, T>, M>
   for Pair<W, C>
 {

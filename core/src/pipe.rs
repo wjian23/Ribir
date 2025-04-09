@@ -1,11 +1,11 @@
 use std::{
-  cell::{Cell, UnsafeCell},
+  cell::{Cell, RefCell, UnsafeCell},
+  collections::HashMap,
   convert::Infallible,
   ops::RangeInclusive,
   ptr::NonNull,
 };
 
-use ahash::HashMap;
 use ribir_algo::Sc;
 use rxrust::ops::box_it::BoxOp;
 use smallvec::SmallVec;
@@ -23,8 +23,8 @@ impl<'c, const M: usize, W: IntoWidget<'c, M>> PipeKeyWidget<'c, M> for W {
   fn into_key_widget(self) -> (Option<Key>, Widget<'c>) { (None, self.into_widget()) }
 }
 
-impl<'c> PipeKeyWidget<'c, 0> for (Key, Widget<'c>) {
-  fn into_key_widget(self) -> (Option<Key>, Widget<'c>) { (Some(self.0), self.1) }
+impl<'c, const M: usize, W: IntoWidget<'c, M>> PipeKeyWidget<'c, M> for (Option<Key>, W) {
+  fn into_key_widget(self) -> (Option<Key>, Widget<'c>) { (self.0, self.1.into_widget()) }
 }
 
 /// Trait used to create a widget from a pipe value.
@@ -113,6 +113,68 @@ pub trait Pipe: 'static {
   fn box_unzip(
     self: Box<Self>, scope: ModifyScope, priority: Option<PipeWidgetBuildInit>,
   ) -> (Self::Value, ValueStream<Self::Value>);
+
+  fn on_key_diff<
+    V,
+    F: for<'a, 'b> Fn(&'b mut Box<dyn Iterator<Item = KeyDiff<&'a V>> + 'a>) + 'static,
+    R: Fn(&mut Box<dyn Iterator<Item = RemovedKey>>) + 'static,
+    I,
+  >(
+    self, handle: KeyDiffHandle<F, R>,
+  ) -> impl Pipe<Value = impl FnOnce() -> Vec<(Option<Key>, V)>>
+  where
+    Self: Sized,
+    Self::Value: FnOnce() -> I,
+    V: 'static,
+    I: IntoIterator<Item = (Option<Key>, V)>,
+  {
+    let handle = Sc::new(handle);
+    let index = Sc::new(RefCell::new(HashMap::<Key, usize>::new()));
+    self.map(move |f| {
+      let handle = handle.clone();
+      let index = index.clone();
+      move || {
+        let data = f();
+
+        let mut new_index = HashMap::<Key, usize>::new();
+        let KeyDiffHandle { on_update, on_removed } = &*handle;
+        let items = data.into_iter().collect::<Vec<_>>();
+        {
+          let mut it: Box<dyn Iterator<Item = KeyDiff<&V>>> =
+            Box::new(items.iter().enumerate().map(|(idx, (key, v))| {
+              let old_index =
+                if let Some(key) = &key { index.borrow_mut().remove(key) } else { None };
+              if let Some(key) = &key {
+                new_index.insert(key.clone(), idx);
+              }
+              if let Some(old_index) = old_index {
+                KeyDiff::Keep { key: key.clone().unwrap(), data: v, old_index }
+              } else {
+                KeyDiff::Add { key: key.clone(), data: v }
+              }
+            }));
+
+          if let Some(on_update) = on_update {
+            on_update(&mut it);
+          };
+          let _ = it.count();
+
+          let removed = std::mem::replace(&mut *index.borrow_mut(), new_index);
+          if let Some(on_removed) = on_removed {
+            on_removed(
+              &mut (Box::new(
+                removed
+                  .into_iter()
+                  .map(|(k, v)| RemovedKey { key: k, index: v }),
+              ) as Box<dyn Iterator<Item = RemovedKey>>),
+            );
+          }
+        }
+
+        items
+      }
+    })
+  }
 }
 
 /// A trait object type for `Pipe`, help to store a concrete `Pipe`
@@ -146,6 +208,49 @@ impl<V: 'static> BoxPipe<V> {
 
   #[inline]
   pub fn into_pipe(self) -> Box<dyn Pipe<Value = V>> { self.0 }
+}
+
+pub enum KeyDiff<V> {
+  Add { key: Option<Key>, data: V },
+  Keep { key: Key, data: V, old_index: usize },
+}
+
+pub struct RemovedKey {
+  pub key: Key,
+  pub index: usize,
+}
+
+pub struct KeyDiffHandle<F, R> {
+  on_update: Option<F>,
+  on_removed: Option<R>,
+}
+
+impl<F, R> KeyDiffHandle<F, R> {
+  pub fn new<W>(on_update: F, on_removed: R) -> Self
+  where
+    F: for<'a, 'b> Fn(&'b mut Box<dyn Iterator<Item = KeyDiff<&'a W>> + 'a>),
+    R: Fn(&mut Box<dyn Iterator<Item = RemovedKey>>) + 'static,
+  {
+    Self { on_update: Some(on_update), on_removed: Some(on_removed) }
+  }
+}
+
+impl<W, F> KeyDiffHandle<for<'a, 'b> fn(&'b mut Box<dyn Iterator<Item = KeyDiff<&'a W>> + 'a>), F> {
+  pub fn on_removed(on_removed: F) -> Self
+  where
+    F: Fn(&mut Box<dyn Iterator<Item = RemovedKey>>) + 'static,
+  {
+    Self { on_update: None, on_removed: Some(on_removed) }
+  }
+}
+
+impl<F> KeyDiffHandle<F, fn(&mut Box<dyn Iterator<Item = RemovedKey>>)> {
+  pub fn on_update<W>(on_update: F) -> Self
+  where
+    F: for<'a, 'b> Fn(&'b mut Box<dyn Iterator<Item = KeyDiff<&'a W>> + 'a>),
+  {
+    Self { on_update: Some(on_update), on_removed: None }
+  }
 }
 
 pub(crate) trait InnerPipe: Pipe + Sized {
@@ -528,7 +633,10 @@ where
 }
 
 /// A pipe that never changes, help to construct a pipe from a value.
-struct ValuePipe<V>(V);
+pub(crate) struct ValuePipe<V>(V);
+impl<V> ValuePipe<V> {
+  pub(crate) fn new(v: V) -> Self { Self(v) }
+}
 
 impl<V: 'static> Pipe for ValuePipe<V> {
   type Value = V;
@@ -951,7 +1059,12 @@ where
 mod tests {
   use std::{cell::Cell, rc::Rc};
 
-  use crate::{prelude::*, reset_test_env, test_helper::*};
+  use crate::{
+    pipe::{KeyDiff, KeyDiffHandle},
+    prelude::*,
+    reset_test_env,
+    test_helper::*,
+  };
 
   #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
   #[test]
@@ -1656,5 +1769,60 @@ mod tests {
     // refreshing the child widget of the pipe.
     *m_writer.write() += 1;
     wnd.draw_frame();
+  }
+
+  #[test]
+  fn key_diff() {
+    reset_test_env!();
+    let (cnt, cnt_w) = split_value(3);
+    let (add, add_w) = split_value(vec![]);
+    let (remove, remove_w) = split_value(vec![]);
+    let (keep, keep_w) = split_value(vec![]);
+    let widget = fn_widget! {
+      @MockMulti {
+        @ {
+          pipe!($cnt;).map(move |_|
+            move || {
+              (0..*$cnt).map(move |idx| {
+                @KeyWidget {
+                  key: Some(Key::Number(idx)),
+                  @Void{}
+                }
+              })
+            }
+          )
+          .on_key_diff(KeyDiffHandle::new(
+            move |it| {
+              it.for_each(|i| match i {
+                  KeyDiff::Add { key, data: _ } => {
+                    $add_w.write().push(key.clone());
+                  },
+                  KeyDiff::Keep { key, data: _, old_index: _ } => {
+                    $keep_w.write().push(key.clone());
+                  }
+                }
+              );
+            },
+            move |it| it.for_each(|i| $remove_w.write().push(i.key.clone()))
+          ))
+        }
+      }
+    };
+    let mut wnd = TestWindow::new(widget);
+    wnd.draw_frame();
+
+    assert_eq!(add.read().len(), 3);
+
+    *cnt_w.write() -= 1;
+    wnd.draw_frame();
+    assert_eq!(add.read().len(), 3);
+    assert_eq!(keep.read().len(), 2);
+    assert_eq!(remove.read().len(), 1);
+
+    *cnt_w.write() += 2;
+    wnd.draw_frame();
+    assert_eq!(add.read().len(), 5);
+    assert_eq!(keep.read().len(), 4);
+    assert_eq!(remove.read().len(), 1);
   }
 }
