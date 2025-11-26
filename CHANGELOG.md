@@ -25,6 +25,10 @@ Please only add new entries below the [Unreleased](#unreleased---releasedate) he
 
 ## [@Unreleased] - @ReleaseDate
 
+### Features
+
+- **widgets**: add Badge widget for showing notifications, counts, or status information on top of another widget.(#pr @wjian23)
+
 ## [0.4.0-alpha.51] - 2025-11-26
 
 ### Features
