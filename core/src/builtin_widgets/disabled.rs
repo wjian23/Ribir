@@ -14,15 +14,17 @@ class_names! {
 ///
 /// # Example
 ///
-/// ``` no_run
+/// ```rust
 /// use ribir::prelude::*;
 ///
-/// let w = button! {
-///     on_tap: move |_| panic!("you can't trigger me"),
+/// fn_widget! {
+///   @Text {
+///     text: "You can't click me",
 ///     disabled: true,
-///     @ { "disabled" }
-/// };
-/// App::run(w);
+///     on_tap: |_: &mut PointerEvent| println!("Click!"),
+///   }
+/// }
+/// ```
 #[derive(Clone, Default)]
 pub struct Disabled {
   pub disabled: bool,

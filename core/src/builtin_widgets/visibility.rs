@@ -1,5 +1,18 @@
 use crate::{prelude::*, wrap_render::*};
 
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   @Container {
+///     size: Size::new(100., 100.),
+///     background: Color::RED,
+///     visible: false,
+///   }
+/// }
+/// ```
 #[derive(Default)]
 pub struct Visibility {
   pub visible: bool,

@@ -5,6 +5,19 @@ use super::*;
 /// A widget that utilizes the background brush to paint a background box based
 /// on the layout size. If a `Radius` is provided, the corners of the box will
 /// be rounded.
+///
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   @Text {
+///     text: "I have a red background",
+///     background: Color::RED,
+///   }
+/// }
+/// ```
 #[derive(Default, Clone)]
 pub struct Background {
   /// The background of the box.

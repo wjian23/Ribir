@@ -3,7 +3,19 @@ use crate::{prelude::*, wrap_render::*};
 /// A widget that sets the brush for foreground elements. It's can be inherited
 /// by its descendants. When meet a color of `background`, the foreground will
 /// be overwrite by it.
-
+///
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   @Text {
+///     text: "I am red!",
+///     foreground: Color::RED,
+///   }
+/// }
+/// ```
 #[derive(Default)]
 pub struct Foreground {
   pub foreground: Brush,

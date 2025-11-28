@@ -45,6 +45,26 @@ use crate::{prelude::*, window::WindowFlags, wrap_render::*};
 
 /// This widget enables smooth position transitions for its declare child
 /// between layout. See the [module-level documentation](self) for more.
+///
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   @SmoothPos {
+///     transition: EasingTransition {
+///       easing: easing::LinearEasing,
+///       duration: Duration::from_millis(500),
+///     },
+///     init_value: Anchor::left(0.),
+///     @Container {
+///       size: Size::new(50., 50.),
+///       background: Color::BLUE,
+///     }
+///   }
+/// }
+/// ```
 pub struct SmoothPos(Stateful<SmoothImpl<Anchor, Point>>);
 
 /// This widget enables smooth transitions for its declare child's x-axis

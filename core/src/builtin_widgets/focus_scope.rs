@@ -2,6 +2,28 @@ use std::cell::RefCell;
 
 use crate::{events::focus_mgr::FocusType, prelude::*};
 
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   @FocusScope {
+///     // Prevent children from being focused
+///     skip_descendants: true,
+///     @Column {
+///       @Container {
+///          size: Size::new(50., 50.),
+///          tab_index: 0, // This will be ignored due to skip_descendants
+///       }
+///       @Container {
+///          size: Size::new(50., 50.),
+///          tab_index: 0, // This will be ignored due to skip_descendants
+///       }
+///     }
+///   }
+/// }
+/// ```
 #[derive(Declare, Clone, Default)]
 pub struct FocusScope {
   /// If true, the descendants can not be focused.

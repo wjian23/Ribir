@@ -1,3 +1,19 @@
+//! This module implements the Render trait for `Resource<PixelImage>`, allowing
+//! it to be used directly as a widget.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use ribir::prelude::*;
+//!
+//! fn_widget! {
+//!    // Load an image from bytes (e.g., included from a file)
+//!    let img_data = include_bytes!("../../../static/hero-banner.png");
+//!    let img = PixelImage::from_png(img_data);
+//!    let img = Resource::new(img);
+//!    @ { img }
+//! }
+//! ```
 use crate::prelude::*;
 
 impl Render for Resource<PixelImage> {

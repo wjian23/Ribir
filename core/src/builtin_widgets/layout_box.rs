@@ -2,6 +2,24 @@ use crate::prelude::*;
 
 /// A widget that allows access to the layout result of its child.
 ///
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   let mut lb = @LayoutBox {};
+///   @Column {
+///     @$lb {
+///       @Container { size: Size::new(100., 100.) }
+///     }
+///     @Text {
+///       text: pipe!($read(lb.layout_width()).to_string())
+///     }
+///   }
+/// }
+/// ```
+///
 /// ## Caution: Avoid Dependency on Layout Results for View Updates
 ///
 /// Layout operations occur frequently, so relying on layout results to update

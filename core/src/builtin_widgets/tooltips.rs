@@ -8,15 +8,16 @@ class_names! {
 }
 /// Add attributes of tooltips to Widget Declarer.
 ///
-/// ### Example:
-/// ```no_run
+/// # Example:
+/// ```rust
 /// use ribir::prelude::*;
 ///
-/// let w = text! {
-///   text: "hover to show tooltips!",
-///   tooltips: "this is tooltips",
-/// };
-/// App::run(w);
+/// fn_widget! {
+///   @Text {
+///     text: "Hover me",
+///     tooltips: "I'm a tooltip!",
+///   }
+/// }
 /// ```
 #[derive(Default)]
 pub struct Tooltips {

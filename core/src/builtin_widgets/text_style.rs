@@ -2,6 +2,22 @@ use crate::prelude::*;
 
 /// This widget establishes the text style for painting the text within its
 /// descendants.
+///
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   @Text {
+///     text: "Big Text",
+///     text_style: TextStyle {
+///       font_size: 32.,
+///       ..TextStyle::default()
+///     },
+///   }
+/// }
+/// ```
 pub struct TextStyleWidget {
   pub text_style: TextStyle,
 }

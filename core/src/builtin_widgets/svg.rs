@@ -1,3 +1,19 @@
+//! This module implements the Render trait for `Svg`, allowing it to be used
+//! directly as a widget.
+//!
+//! # Example
+//!
+//! ```rust
+//! use ribir::prelude::*;
+//!
+//! fn_widget! {
+//!    let svg = Svg::parse_from_bytes(
+//!      br#"<svg width="100" height="100"><rect width="100" height="100" fill="red" /></svg>"#,
+//!      true, true
+//!    ).unwrap();
+//!    @ { svg }
+//! }
+//! ```
 use crate::prelude::*;
 
 impl Render for Svg {

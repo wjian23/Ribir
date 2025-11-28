@@ -1,0 +1,482 @@
+# Custom Widgets
+
+Custom widgets are the building blocks of any Ribir application. They allow you to encapsulate complex UI functionality, state, and behavior into reusable components that can be composed together to form larger applications.
+
+## Understanding Widget Types
+
+In Ribir, there are two main categories of custom widgets you can create:
+
+1. **Compose Widgets**: High-level widgets that build UI by combining other widgets using the `fn_widget!` macro
+2. **Render Widgets**: Low-level widgets that handle layout and painting directly
+
+## Creating Compose Widgets
+
+The most common type of custom widget is a `Compose` widget. These widgets don't draw anything themselves; instead, they compose other existing widgets to create something new.
+
+### Basic Structure
+
+To create a custom `Compose` widget, you need to:
+
+1. Define a struct with `#[derive(Declare)]`
+2. Implement the `Compose` trait
+3. Use the `fn_widget!` macro in the `compose` method
+
+```rust
+use ribir::prelude::*;
+
+#[derive(Declare)]
+pub struct DocWelcomeCard;
+
+impl Compose for DocWelcomeCard {
+    fn compose(this: impl StateWriter<Value = Self>) -> Widget<'static> {
+        fn_widget! {
+            @Column {
+                @Text { text: "Welcome!" }
+                @Button { @Text { text: "Click me" } }
+            }
+        }.into_widget()
+    }
+}
+```
+
+The `compose` method must return a `Widget`, so we need to call `.into_widget()` on the `fn_widget!` result.
+
+### Using the Custom Widget
+
+Once you've defined your custom widget, you can use it just like any built-in widget in the `fn_widget!` DSL:
+
+```rust
+use ribir::prelude::*;
+
+fn main() {
+    App::run(fn_widget! {
+        @DocWelcomeCard {}
+    });
+}
+```
+
+### Adding Properties to Custom Widgets
+
+You can add properties to your custom widget by adding fields to your struct. These fields can be initialized in the DSL using the same syntax as built-in widgets:
+
+```rust
+use ribir::prelude::*;
+
+#[derive(Declare)]
+pub struct DocUserCard {
+    name: String,
+    email: String,
+    #[declare(default)]
+    is_online: bool,
+}
+
+impl Compose for DocUserCard {
+    fn compose(this: impl StateWriter<Value = Self>) -> Widget<'static> {
+        fn_widget! {
+            @Container {
+                padding: EdgeInsets::all(16.),
+                border: Border::all(BorderSide::new(1., Color::LIGHT_GRAY.into())),
+                @Column {
+                    @Text {
+                        text: pipe!($read(this).name.clone()),
+                        text_style: TypographyTheme::of(BuildCtx::get()).title_medium.text.clone(),
+                    }
+                    @Text {
+                        text: pipe!($read(this).email.clone()),
+                        text_style: TypographyTheme::of(BuildCtx::get()).body_medium.text.clone(),
+                    }
+                    @Row {
+                        @Text {
+                            text: if $read(this).is_online { "Online" } else { "Offline" },
+                            text_style: TextStyle {
+                                color: if $read(this).is_online {
+                                    Color::GREEN
+                                } else {
+                                    Color::GRAY
+                                },
+                                ..TypographyTheme::of(BuildCtx::get()).body_small.text
+                            },
+                        }
+                        @Container {
+                            size: Size::new(10., 10.),
+                            margin: EdgeInsets::horizontal(8.),
+                            background: if $read(this).is_online {
+                                Color::GREEN
+                            } else {
+                                Color::GRAY
+                            },
+                            radius: Radius::all(5.),
+                        }
+                    }
+                }
+            }
+        }.into_widget()
+    }
+}
+
+// Usage:
+fn example() -> Widget<'static> {
+    fn_widget! {
+        @DocUserCard {
+            name: "John Doe".to_string(),
+            email: "john@example.com".to_string(),
+            is_online: true,
+        }
+    }
+}
+```
+
+> **Note:** When using `#[derive(Declare)]`, fields are **mandatory** by default. Any field that does not have the `#[declare(default)]` or `#[declare(skip)]` attribute must be provided when declaring the widget. Fields with `#[declare(default)]` are optional, while `#[declare(skip)]` excludes the field from the builder entirely.
+
+## Creating ComposeChild Widgets
+
+Some widgets are designed to wrap or modify a single child widget. These implement the `ComposeChild` trait instead of `Compose`.
+
+```rust
+use ribir::prelude::*;
+
+#[derive(Declare, Clone)]
+pub struct DocCardDecorator {
+    #[declare(default)]
+    elevation: f32,
+}
+
+impl ComposeChild<'static> for DocCardDecorator {
+    type Child = Widget<'static>;
+
+    fn compose_child(this: impl StateWriter<Value = Self>, child: Self::Child) -> Widget<'static> {
+        fn_widget! {
+            @Container {
+                padding: EdgeInsets::all(16.),
+                background: Color::WHITE,
+                border: Border::all(BorderSide::new(1., Color::LIGHT_GRAY.into())),
+                // Add shadow based on elevation
+                transform: Transform::identity()
+                    .scale(1. - $read(this).elevation * 0.01, 1. - $read(this).elevation * 0.01, 1.)
+                    .translate($read(this).elevation, $read(this).elevation),
+                @ { child }
+            }
+        }.into_widget()
+    }
+}
+
+// Usage:
+fn example() -> Widget<'static> {
+    fn_widget! {
+        @DocCardDecorator {
+            elevation: 4.,
+            @Text { text: "This text is inside a card" }
+        }
+    }
+}
+```
+
+## Working with State in Custom Widgets
+
+Custom widgets can maintain their own state and respond to user interactions:
+
+```rust
+use ribir::prelude::*;
+
+#[derive(Declare)]
+pub struct DocCounter {
+    #[declare(default)]
+    initial_value: i32,
+}
+
+impl Compose for DocCounter {
+    fn compose(this: impl StateWriter<Value = Self>) -> Widget<'static> {
+        fn_widget! {
+            let count = Stateful::new($read(this).initial_value);
+
+            @Container {
+                padding: EdgeInsets::all(16.),
+                background: Color::WHITE,
+                @Row {
+                    @Button {
+                        on_tap: move |_| *$write(count) -= 1,
+                        @Text { text: "-" }
+                    }
+                    @Text {
+                        h_align: HAlign::Center,
+                        text: pipe!($read(count).to_string()),
+                        text_style: TypographyTheme::of(BuildCtx::get()).title_large.text.clone(),
+                    }
+                    @Button {
+                        on_tap: move |_| *$write(count) += 1,
+                        @Text { text: "+" }
+                    }
+                }
+            }
+        }.into_widget()
+    }
+}
+```
+
+## Understanding the Child System
+
+Ribir has a strict type system for parent-child relationships that ensures type safety at compile time:
+
+- **SingleChild**: Widgets that accept exactly one child (like `Padding`, `Container`)
+- **MultiChild**: Widgets that accept multiple children (like `Row`, `Column`)
+
+The `#[derive(Declare)]` macro can automatically implement the appropriate child system trait based on your struct's fields:
+
+```rust
+use ribir::prelude::*;
+
+// This widget will automatically implement SingleChild
+#[derive(Declare, SingleChild)]
+pub struct DocSimpleDecorator {
+    #[declare(default)]
+    margin: EdgeInsets,
+}
+
+impl ComposeChild<'static> for DocSimpleDecorator {
+    type Child = Widget<'static>;
+
+    fn compose_child(this: impl StateWriter<Value = Self>, child: Self::Child) -> Widget<'static> {
+        fn_widget! {
+            @Container {
+                margin: $read(this).margin,
+                @ { child }
+            }
+        }.into_widget()
+    }
+}
+```
+
+### Template-Based Child Composition
+
+Templates provide compile-time type safety for widget composition. The `#[derive(Template)]` macro enables **automatic type inference**, allowing you to write children without explicit type constructors or field names.
+
+#### Automatic Type Inference
+
+When using Templates, Ribir automatically infers:
+- **Enum variants** based on child type (via `RFrom` trait)
+- **Struct fields** based on child type (via `ComposeWithChild` trait)
+
+This means you can write `@{ child }` and Ribir will automatically determine where it belongs in your template structure.
+
+#### Enum Templates: Variant Inference
+
+Enum templates automatically convert children to the appropriate variant:
+
+```rust
+use ribir::prelude::*;
+
+// Define an enum template with different variant types
+#[derive(Template)]
+enum ContentType {
+    Text(CowArc<str>),
+    Number(i32),
+}
+
+#[derive(Declare)]
+struct MyWidget;
+
+impl ComposeChild<'static> for MyWidget {
+    type Child = ContentType;
+
+    fn compose_child(_: impl StateWriter<Value = Self>, _child: Self::Child) -> Widget<'static> {
+        Void.into_widget()
+    }
+}
+
+// Usage - automatic variant inference:
+let text_widget = fn_widget! {
+    @MyWidget {
+        @{ "Hello" }  // Automatically becomes ContentType::Text
+    }
+};
+
+let number_widget = fn_widget! {
+    @MyWidget {
+        @{ 42 }  // Automatically becomes ContentType::Number
+    }
+};
+```
+
+The `#[derive(Template)]` macro generates `RFrom` implementations for each variant, enabling automatic conversion based on the child's type.
+
+#### Struct Templates: Field Inference
+
+Struct templates automatically match children to fields by type, **regardless of declaration order**:
+
+```rust
+use ribir::prelude::*;
+
+// Define custom types for demonstration
+struct TypeA;
+struct TypeB;
+struct TypeC;
+
+#[derive(Template)]
+struct StructTemplate {
+    a: TypeA,
+    b: Option<TypeB>,
+    c: Option<TypeC>,
+}
+
+#[derive(Declare)]
+struct MyContainer;
+
+impl ComposeChild<'static> for MyContainer {
+    type Child = StructTemplate;
+
+    fn compose_child(_: impl StateWriter<Value = Self>, _child: Self::Child) -> Widget<'static> {
+        Void.into_widget()
+    }
+}
+
+// Usage - order-independent field matching:
+let widget = fn_widget! {
+    @MyContainer {
+        @{ TypeC }  // Matched to 'c' field by type
+        @{ TypeA }  // Matched to 'a' field by type
+        @{ TypeB }  // Matched to 'b' field by type
+    }
+};
+
+// Optional fields can be omitted:
+let minimal = fn_widget! {
+    @MyContainer {
+        @{ TypeA }  // Only required field
+    }
+};
+```
+
+The macro generates `ComposeWithChild` implementations with type-specific markers for each field, enabling automatic field assignment.
+
+#### Real-World Example: List Widget
+
+The `List` widget demonstrates practical template usage:
+
+```rust
+// Simplified from widgets/src/list.rs
+#[derive(Template)]
+pub enum ListChild<'c> {
+    StandardItem(PairOf<'c, ListItem>),
+    CustomItem(PairOf<'c, ListCustomItem>),
+    Divider(FatObj<Stateful<Divider>>),
+}
+
+impl<'c> ComposeChild<'c> for List {
+    type Child = Vec<ListChild<'c>>;
+    // ...
+}
+
+// Usage - automatic variant inference:
+let list = fn_widget! {
+    @List {
+        @ListItem { /* ... */ }      // Automatically becomes ListChild::StandardItem
+        @ListCustomItem { /* ... */ } // Automatically becomes ListChild::CustomItem
+        @Divider {}                   // Automatically becomes ListChild::Divider
+    }
+};
+```
+
+#### When Explicit Syntax Is Required
+
+Automatic inference works when types are unique. Use explicit syntax when:
+
+1. **Multiple fields have the same type** - use `#[template(field)]` attribute:
+```rust
+#[derive(Template)]
+struct TwoTexts {
+    #[template(field)]
+    first: CowArc<str>,
+    #[template(field)]
+    second: CowArc<str>,
+}
+
+// Must use explicit field assignment:
+let widget = fn_widget! {
+    @MyWidget {
+        @TwoTexts {
+            first: "First text",
+            second: "Second text",
+        }
+    }
+};
+```
+
+2. **Non-widget template fields** (use `#[template(field)]` attribute):
+```rust
+struct TypeA;
+
+#[derive(Template)]
+struct ConfigTemplate {
+    #[template(field = 5usize)]  // Default value
+    count: usize,
+    #[template(field)]           // Required field
+    name: CowArc<str>,
+    item: TypeA,                 // Child field (auto-matched by type)
+}
+
+// Can override default or omit to use default:
+let widget = fn_widget! {
+    @MyWidget {
+        @ConfigTemplate {
+            count: 10usize,  // Override default
+            name: "test",    // Required field
+            @{ TypeA }       // Child matched by type
+        }
+    }
+};
+
+// Using default value:
+let widget2 = fn_widget! {
+    @MyWidget {
+        @ConfigTemplate {
+            name: "test",  // count uses default value of 5
+            @{ TypeA }
+        }
+    }
+};
+```
+
+This template system ensures type-safe widget composition while minimizing boilerplate through intelligent type inference.
+
+## Advanced: Creating Render Widgets
+
+For widgets that need to handle their own layout and painting (like drawing custom shapes or complex interactions), you implement the `Render` trait:
+
+```rust
+use ribir::prelude::*;
+
+// This is a simple example - more complex Render widgets would
+// implement custom layout and painting logic
+#[derive(Declare)]
+pub struct DocCustomShape {
+    #[declare(default)]
+    color: Color,
+    #[declare(default)]
+    size: Size,
+}
+
+impl Render for DocCustomShape {
+    fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+        // Return the size based on constraints and our desired size
+        clamp.clamp(self.size)
+    }
+
+    fn paint(&self, ctx: &mut PaintingCtx) {
+        // Custom painting logic
+        let rect = Rect::from_size(ctx.box_rect().unwrap().size);
+        ctx.painter().rect(&rect).fill(self.color);
+    }
+}
+```
+
+## Best Practices
+
+1. **Use `#[derive(Declare)]`**: This macro generates the builder pattern needed for your widget to work with the `@` syntax
+2. **Field Requirements**: Fields are mandatory by default. Use `#[declare(default)]` for optional fields or `#[declare(skip)]` to exclude them from the builder.
+3. **State encapsulation**: Keep widget state encapsulated and avoid global state
+4. **Reusability**: Design widgets to be reusable and composable
+5. **Performance**: Be mindful of expensive operations in `perform_layout` and `paint` methods
+
+## Summary
+
+Custom widgets form the foundation of any Ribir application. By understanding the difference between `Compose` and `Render` widgets, and how to properly define and use state, you can create powerful, reusable components that leverage the full power of Ribir's declarative UI system.

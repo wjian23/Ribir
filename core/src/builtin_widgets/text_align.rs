@@ -1,6 +1,21 @@
 use crate::prelude::*;
 
 /// `TextAlign` is used to align multiline text within the text bounds, with the
+///
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   @Container {
+///     text_align: TextAlign::Center,
+///     @Text {
+///        text: "Line 1\nLine 2",
+///     }
+///   }
+/// }
+/// ```
 #[derive(Default)]
 pub struct TextAlignWidget {
   pub text_align: TextAlign,

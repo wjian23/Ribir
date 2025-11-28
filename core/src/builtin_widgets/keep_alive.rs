@@ -12,6 +12,19 @@ use crate::prelude::*;
 /// dropped.
 ///
 /// It's useful when you need run a leave animation for a widget.
+///
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   @Text {
+///     text: "I will survive even if my parent tries to remove me!",
+///     keep_alive: true,
+///   }
+/// }
+/// ```
 #[derive(Default)]
 pub struct KeepAlive {
   pub keep_alive: bool,

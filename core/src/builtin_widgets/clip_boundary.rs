@@ -3,6 +3,22 @@ use wrap_render::WrapRender;
 use crate::prelude::*;
 
 /// This widget use to clip the host widget by the boundary rect with radius.
+///
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   @Container {
+///     size: Size::new(100., 100.),
+///     background: Color::RED,
+///     clip_boundary: true,
+///     radius: Radius::all(10.),
+///     @Container { /* This child will be clipped */ }
+///   }
+/// }
+/// ```
 #[derive(Default, Clone)]
 pub struct ClipBoundary {
   /// If true, clip the host widget by the boundary rect with radius, else do

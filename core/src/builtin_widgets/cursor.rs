@@ -1,7 +1,20 @@
 use crate::prelude::*;
 
 /// `Cursor` is an attribute to assign an `cursor` to a widget.
-
+///
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   @Container {
+///     size: Size::new(100., 100.),
+///     cursor: CursorIcon::Pointer,
+///     @Text { text: "Hover me!" }
+///   }
+/// }
+/// ```
 #[derive(Default, Debug)]
 pub struct Cursor {
   pub cursor: CursorIcon,

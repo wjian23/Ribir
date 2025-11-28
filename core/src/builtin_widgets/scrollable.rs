@@ -17,6 +17,20 @@ pub enum Scrollable {
 }
 
 /// Helper struct for builtin scrollable field.
+///
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   @Container {
+///     size: Size::new(100., 1000.),
+///     background: Color::RED,
+///     scrollable: Scrollable::Y,
+///   }
+/// }
+/// ```
 #[derive(Default)]
 pub struct ScrollableWidget {
   pub scrollable: Scrollable,

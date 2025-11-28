@@ -17,6 +17,22 @@ pub type TextValue = PipeValue<CowArc<str>>;
 ///
 /// The default alignment is [`TextAlign::Start`]. Glyph calculations are cached
 /// internally to optimize rendering performance.
+///
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   @Text {
+///     text: "Hello Ribir!",
+///     text_style: TextStyle {
+///       font_size: 24.,
+///       ..TextStyle::default()
+///     }
+///   }
+/// }
+/// ```
 #[derive(Declare)]
 pub struct Text {
   /// The text content to display, using copy-on-write semantics for efficient

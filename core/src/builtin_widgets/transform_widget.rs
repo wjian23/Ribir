@@ -1,5 +1,18 @@
 use crate::{prelude::*, wrap_render::*};
 
+/// # Example
+///
+/// ```rust
+/// use ribir::prelude::*;
+///
+/// fn_widget! {
+///   @Container {
+///     size: Size::new(50., 50.),
+///     background: Color::RED,
+///     transform: Transform::scale(2., 2.),
+///   }
+/// }
+/// ```
 #[derive(Clone, Default)]
 pub struct TransformWidget {
   pub transform: Transform,

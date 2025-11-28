@@ -10,20 +10,19 @@ pub struct EdgeInsets {
 
 /// The widget utilizes empty space to surround the child widget.
 ///
-/// ```
+/// # Example
+///
+/// ```rust
 /// use ribir::prelude::*;
 ///
-/// let _padding = text! {
-///   text: "Background includes the empty space",
-///   padding: EdgeInsets::all(10.),
-///   background: Color::GREEN,
-/// };
-///
-/// let _margin = text! {
-///   text: "Background does not include the empty space",
-///   margin: EdgeInsets::all(10.),
-///   background: Color::GREEN,
-/// };
+/// fn_widget! {
+///   @Container {
+///     size: Size::new(100., 100.),
+///     margin: EdgeInsets::all(10.),
+///     background: Color::GREEN,
+///     @Text { text: "Margin example" }
+///   }
+/// }
 /// ```
 #[derive(SingleChild, Default, Clone, PartialEq)]
 pub struct Margin {
