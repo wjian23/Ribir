@@ -16,75 +16,54 @@ fn main() {
 }
 ```
 
+`Stateful<T>` actually implements `StateReader<T>`, `StateWatcher<T>`, and `StateWriter<T>` traits, which provide access to the state.
+
+### StateReader<T>
+
+The `StateReader<T>` trait provides read-only access to the state. Through the implementation of `StateReader<T>`, you can obtain a read reference to the state.
+
+### StateWatcher<T>
+
+The `StateWatcher<T>` trait provides read-only access to the state. But unlike `StateReader<T>`, through the implementation of `StateWatcher<T>`, you get a subscription to the state changes of the host `T` (i.e., when the state of the host `T` changes, you will be notified).
+
+### StateWriter<T>
+
+The `StateWriter<T>` trait provides write access to the state. Through the implementation of `StateWriter<T>`, you can obtain a write reference to the state of the host `T`. When the modification to the mut ref is completed, Ribir will automatically notify all UI parts dependent on that data.
+
 ## Reading and Writing State
 
-When working within the `fn_widget!` DSL or reactive macros like `pipe!` and `watch!`, you access the state using specific syntax helpers:
+In the `fn_widget!` DSL, you can use specific syntax helpers to access state:
 
-- **`$read(state)`**: Obtains a read reference to the state. Crucially, this also **subscribes** the current context to changes in `state`.
-- **`$write(state)`**: Obtains a write reference to the state. Modifying the data through this reference will trigger updates.
+- **`$read(state)`**: Obtains a read reference to the state via `StateReader<T>`.
+- **`$write(state)`**: Obtains a write reference to the state via `StateWriter<T>`. Modifying data through this reference will trigger updates.
+- **`pipe!(expr)`**: Captures access to state via `$read`, `$write` in expr, subscribes to state changes via `StateWatcher<T>`, calls expr and returns the value of expr.
+- **`watch!(expr)`**: Captures access to state via `$read`, `$write` in expr, subscribes to state changes via `StateWatcher<T>`, and calls expr.
 
-**Important**: The `$read` and `$write` operators are **DSL-specific** and only work within macros that support the Ribir DSL syntax, such as `fn_widget!`, `pipe!`, `watch!`, and `rdl!`. These operators are not valid Rust syntax outside of these macros and will cause compilation errors if used in regular Rust code or nested within third-party macros.
+**Important**: The `$read`, `$write`, `pipe!`, `watch!` operators are **DSL-specific** and only work within macros that support the Ribir DSL syntax, such as `fn_widget!` and `rdl!`. These operators are not valid Rust syntax outside of these macros and will cause compilation errors if used in regular Rust code or nested within third-party macros.
 
 *Note: Outside of DSL macros, you can use `.read()` and `.write()` methods on the `Stateful` object, but these do not establish reactive dependencies automatically.*
 
 ## DSL Operators in Third-Party Macros
 
-The DSL operators (`@`, `$read`, `$write`, etc.) are **not valid** when nested inside third-party macros. This is because the DSL preprocessing only happens within Ribir's own macros. For example:
+The DSL operators (`@`, `$read`, `$write`, etc.) are **not valid** when nested inside third-party macros. This is because we cannot anticipate the processing logic of third-party macros. For example:
 
 **❌ Invalid usage:**
 ```rust
-// This will NOT work - $read is processed by println! which doesn't understand DSL syntax
-println!("{}", $read(some_state));
-
-// This will NOT work - $write is processed by custom macro that doesn't support DSL
-my_custom_macro!($write(some_state) += 1);
+fn_widget! {
+    ...
+    // This will NOT work - $read is processed by println! which doesn't understand DSL syntax
+    println!("{}", $read(some_state));
+    ...
+}
 ```
 
 **✅ Valid usage:**
 ```rust
-// This works - $read is processed by Ribir's pipe! macro
-let text = pipe!($read(some_state).to_string());
-
-// This works - $write is processed by Ribir's DSL context
-@Button {
-    on_tap: move |_| *$write(some_state) += 1,
-}
-```
-
-If you need to use state values in contexts that don't support DSL, use the regular `.read()` and `.write()` methods instead.
-
-## Modifying Built-in Widget Properties
-
-When working with widgets, you often need to modify built-in properties (like `margin`, `opacity`, `background`) that are provided by the `FatObj` wrapper. Unlike fields in your own data structs, these properties are accessed via methods that return a `StateWriter` for that specific property.
-
-To modify a built-in property on a `Stateful` widget:
-1. Access the widget's write guard (giving you the `FatObj`).
-2. Call the property accessor method (e.g., `.margin()`, `.opacity()`), which returns a `StateWriter`.
-3. Write to that returned state.
-
-```rust
-use ribir::prelude::*;
-
-fn built_in_property_example() -> Widget<'static> {
-    fn_widget! {
-        // box_widget is a Stateful<FatObj<SizedBox>>
-        let mut box_widget = @SizedBox {
-            size: Size::new(100., 100.),
-            background: Color::RED,
-        };
-
-        @Column {
-            @$box_widget {
-                on_tap: move |_| {
-                    // Correct way to modify a built-in property:
-                    // 1. box_widget.write() -> &mut FatObj
-                    // 2. .opacity() -> StateWriter<f32>
-                    // 3. *$write(...) -> Write access to f32
-                    *$write(box_widget.opacity()) = 0.5;
-                }
-            }
-        }
-    }.into_widget()
+fn_widget! {
+    ...
+    let val = $read(some_state);
+    println!("{}", val);
+    ...
 }
 ```
 

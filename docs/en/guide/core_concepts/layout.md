@@ -55,7 +55,7 @@ fn example() -> Widget<'static> {
 }
 ```
 
-Note: The `clamp` attribute's role is to **further restrict** the constraints passed down from the parent, taking the intersection. If the range defined by the `clamp` attribute does not overlap at all with the parent constraints, it may cause conflicts. The actual behavior depends on the specific implementation of `BoxClamp::clamp` (usually takes the non-empty part of the intersection or the nearest boundary).
+Note: The `clamp` attribute's role is to **further restrict** the constraints passed down from the parent, taking the intersection.
 
 ## Common Layout Widgets
 

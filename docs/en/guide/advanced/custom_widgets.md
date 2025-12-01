@@ -79,32 +79,19 @@ impl Compose for DocUserCard {
                 @Column {
                     @Text {
                         text: pipe!($read(this).name.clone()),
-                        text_style: TypographyTheme::of(BuildCtx::get()).title_medium.text.clone(),
                     }
                     @Text {
                         text: pipe!($read(this).email.clone()),
-                        text_style: TypographyTheme::of(BuildCtx::get()).body_medium.text.clone(),
                     }
                     @Row {
                         @Text {
-                            text: if $read(this).is_online { "Online" } else { "Offline" },
-                            text_style: TextStyle {
-                                color: if $read(this).is_online {
-                                    Color::GREEN
-                                } else {
-                                    Color::GRAY
-                                },
-                                ..TypographyTheme::of(BuildCtx::get()).body_small.text
-                            },
+                            text: pipe!($read(this).is_online).map(|v| if v { "Online" } else { "Offline" }),
+                            foreground: pipe!($read(this).is_online).map(|v| if v { Color::GREEN } else { Color::GRAY }),
                         }
                         @Container {
                             size: Size::new(10., 10.),
                             margin: EdgeInsets::horizontal(8.),
-                            background: if $read(this).is_online {
-                                Color::GREEN
-                            } else {
-                                Color::GRAY
-                            },
+                            background: pipe!($read(this).is_online).map(|v| if v { Color::GREEN } else { Color::GRAY }),
                             radius: Radius::all(5.),
                         }
                     }
@@ -141,10 +128,10 @@ pub struct DocCardDecorator {
     elevation: f32,
 }
 
-impl ComposeChild<'static> for DocCardDecorator {
-    type Child = Widget<'static>;
+impl<'a> ComposeChild<'a> for DocCardDecorator {
+    type Child = Widget<'a>;
 
-    fn compose_child(this: impl StateWriter<Value = Self>, child: Self::Child) -> Widget<'static> {
+    fn compose_child(this: impl StateWriter<Value = Self>, child: Self::Child) -> Widget<'a> {
         fn_widget! {
             @Container {
                 padding: EdgeInsets::all(16.),
@@ -171,47 +158,7 @@ fn example() -> Widget<'static> {
 }
 ```
 
-## Working with State in Custom Widgets
 
-Custom widgets can maintain their own state and respond to user interactions:
-
-```rust
-use ribir::prelude::*;
-
-#[derive(Declare)]
-pub struct DocCounter {
-    #[declare(default)]
-    initial_value: i32,
-}
-
-impl Compose for DocCounter {
-    fn compose(this: impl StateWriter<Value = Self>) -> Widget<'static> {
-        fn_widget! {
-            let count = Stateful::new($read(this).initial_value);
-
-            @Container {
-                padding: EdgeInsets::all(16.),
-                background: Color::WHITE,
-                @Row {
-                    @Button {
-                        on_tap: move |_| *$write(count) -= 1,
-                        @Text { text: "-" }
-                    }
-                    @Text {
-                        h_align: HAlign::Center,
-                        text: pipe!($read(count).to_string()),
-                        text_style: TypographyTheme::of(BuildCtx::get()).title_large.text.clone(),
-                    }
-                    @Button {
-                        on_tap: move |_| *$write(count) += 1,
-                        @Text { text: "+" }
-                    }
-                }
-            }
-        }.into_widget()
-    }
-}
-```
 
 ## Understanding the Child System
 
@@ -225,23 +172,30 @@ The `#[derive(Declare)]` macro can automatically implement the appropriate child
 ```rust
 use ribir::prelude::*;
 
-// This widget will automatically implement SingleChild
+// For example, our Container Widget can accept a single child:
 #[derive(Declare, SingleChild)]
-pub struct DocSimpleDecorator {
-    #[declare(default)]
-    margin: EdgeInsets,
+pub struct Container {
+    pub size: Size,
 }
 
-impl ComposeChild<'static> for DocSimpleDecorator {
-    type Child = Widget<'static>;
+impl Render for Container {
+    fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+        let size = clamp.clamp(self.size);
+        ctx.perform_single_child_layout(BoxClamp::max_size(size));
+        size
+    }
 
-    fn compose_child(this: impl StateWriter<Value = Self>, child: Self::Child) -> Widget<'static> {
-        fn_widget! {
-            @Container {
-                margin: $read(this).margin,
-                @ { child }
-            }
-        }.into_widget()
+    #[inline]
+    fn size_affected_by_child(&self) -> bool { false }
+}
+
+// Usage:
+fn example() -> Widget<'static> {
+    fn_widget! {
+        @Container {
+            size: Size::new(100., 100.),
+            @Text { text: "Hello" } // Can accept a Child Widget
+        }
     }
 }
 ```
@@ -275,10 +229,10 @@ enum ContentType {
 #[derive(Declare)]
 struct MyWidget;
 
-impl ComposeChild<'static> for MyWidget {
+impl<'a> ComposeChild<'a> for MyWidget {
     type Child = ContentType;
 
-    fn compose_child(_: impl StateWriter<Value = Self>, _child: Self::Child) -> Widget<'static> {
+    fn compose_child(_: impl StateWriter<Value = Self>, _child: Self::Child) -> Widget<'a> {
         Void.into_widget()
     }
 }

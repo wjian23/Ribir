@@ -15,7 +15,7 @@ You can provide data using the `Providers` widget or the `providers!` macro (or 
 
 #### Using `providers` Field (Recommended)
 
-Most widgets in Ribir (via `FatObj`) support a `providers` field directly. This is often cleaner than wrapping your widget in a `Providers` widget.
+Most widgets in Ribir (via `FatObj`) support a `providers` field directly (see [Built-in Attributes & FatObj](./built_in_attributes_and_fat_obj.md)). This is often cleaner than wrapping your widget in a `Providers` widget.
 
 ```rust
 use ribir::prelude::*;
@@ -108,13 +108,11 @@ When using `Provider` directly, you need to know whether the data is:
 - First checks for a **watcher provider** (reactive)
 - Falls back to a **value provider** (static)
 
-### Key Conveniences
-
+Advantages of using Variant:
 1. **Unified API**: One method (`Variant::new`) works for both static and dynamic providers
 2. **Automatic Reactivity**: If the provider is a watcher, your widget automatically updates when the value changes
 3. **Easy Mapping**: Transform values while preserving reactivity using `map()`
 4. **Built-in Fallbacks**: Use `new_or()`, `new_or_default()`, or `new_or_else()` to provide default values
-5. **Seamless Integration**: Converts to `PipeValue` for direct use in widget properties
 
 ### Basic Usage
 

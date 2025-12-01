@@ -1,4 +1,4 @@
-# Widget System
+# Compose System
 
 Ribir's widget system is built on three core traits: `Render`, `Compose`, and `ComposeChild`. Understanding these traits is key to creating custom widgets and understanding how Ribir constructs the UI tree.
 
@@ -68,6 +68,8 @@ pub trait ComposeChild<'c>: Sized {
 
 ### SingleChild vs MultiChild
 
+`SingleChild` and `MultiChild` traits are used to identify the type of widget that accepts the number of children, usually used for layout.
+
 - **SingleChild**: Widgets that accept exactly one child.
   - Example: `SizedBox`, `Padding`, `Container`.
   - In DSL: `@Container { @Text { ... } }`
@@ -82,13 +84,23 @@ pub trait ComposeChild<'c>: Sized {
     }
     ```
 
-Ribir validates child types at compile time. If a widget expects a `Header` and `Content` child, you cannot pass it just a `Text` node without wrapping it correctly (or the widget must implement a conversion).
+Usually you just need to specify it when defining the type:
+```rust
+#[derive(SingleChild, Declare)]
+pub struct Container;
+```
 
-## 3. The Widget Declare Phase
+```rust
+#[derive(MultiChild, Declare)]
+pub struct Row;
+```
+
+
+## 3. Widget Usage
 
 When you use the `fn_widget!` macro and the `@WidgetName { ... }` syntax, you are in the **Declare Phase**.
 
-**Important**: The `@` operator and the `$read`, `$write` operators are **DSL-specific** and only work within macros that support the Ribir DSL syntax, such as `fn_widget!`, `pipe!`, `watch!`, and `rdl!`. These operators are not valid Rust syntax outside of these macros and will cause compilation errors if used in regular Rust code or nested within third-party macros.
+**Important**: The `@` operator and the `$read`, `$write` operators are **DSL-specific** and only work within macros that support the Ribir DSL syntax, such as `fn_widget!` and `rdl!`. These operators are not valid Rust syntax outside of these macros and will cause compilation errors if used in regular Rust code or nested within third-party macros.
 
 1. **Builder Pattern**: The syntax `@Text { text: "Hi" }` roughly translates to a builder pattern that constructs the widget.
 2. **State Creation**: If you use `Stateful` widgets or `pipe!`, the framework sets up the reactive graph during this phase.
