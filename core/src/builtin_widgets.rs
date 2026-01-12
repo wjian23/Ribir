@@ -86,6 +86,8 @@ mod text_style;
 pub use text_style::*;
 mod smooth_layout;
 pub use smooth_layout::*;
+mod fixed_size;
+pub use fixed_size::*;
 
 mod track_widget_id;
 pub use track_widget_id::*;
@@ -141,6 +143,7 @@ pub struct FatObj<T> {
   padding: Option<Stateful<Padding>>,
   fitted_box: Option<Stateful<FittedBox>>,
   constrained_box: Option<Stateful<ConstrainedBox>>,
+  fixed_size: Option<Stateful<FixedSize>>,
   radius: Option<Stateful<RadiusWidget>>,
   border: Option<Stateful<BorderWidget>>,
   backdrop: Option<Stateful<BackdropFilter>>,
@@ -207,6 +210,7 @@ impl<T> FatObj<T> {
       margin: self.margin,
       scrollable: self.scrollable,
       constrained_box: self.constrained_box,
+      fixed_size: self.fixed_size,
       transform: self.transform,
 
       anchor: self.anchor,
@@ -250,6 +254,7 @@ impl<T> FatObj<T> {
       && self.margin.is_none()
       && self.scrollable.is_none()
       && self.constrained_box.is_none()
+      && self.fixed_size.is_none()
       && self.transform.is_none()
       && self.anchor.is_none()
       && self.class.is_none()
@@ -741,6 +746,38 @@ impl<T> FatObj<T> {
     init_sub_widget!(self, constrained_box, clamp, v)
   }
 
+  /// Initializes a fixed width constraint for the widget.
+  ///
+  /// When using `Measure::Percent`, the percentage is calculated relative to
+  /// the incoming clamp's max width. This is applied inside any `clamp`
+  /// constraints.
+  pub fn with_width<K: ?Sized>(&mut self, v: impl RInto<PipeValue<Measure>, K>) -> &mut Self {
+    let mix = self
+      .mix_builtin
+      .get_or_insert_with(MixBuiltin::default);
+    let fixed_size = self
+      .fixed_size
+      .get_or_insert_with(|| Stateful::new(<_>::default()));
+    mix.init_sub_widget(v, fixed_size, move |widget, v| widget.width = Some(v));
+    self
+  }
+
+  /// Initializes a fixed height constraint for the widget.
+  ///
+  /// When using `Measure::Percent`, the percentage is calculated relative to
+  /// the incoming clamp's max height. This is applied inside any `clamp`
+  /// constraints.
+  pub fn with_height<K: ?Sized>(&mut self, v: impl RInto<PipeValue<Measure>, K>) -> &mut Self {
+    let mix = self
+      .mix_builtin
+      .get_or_insert_with(MixBuiltin::default);
+    let fixed_size = self
+      .fixed_size
+      .get_or_insert_with(|| Stateful::new(<_>::default()));
+    mix.init_sub_widget(v, fixed_size, move |widget, v| widget.height = Some(v));
+    self
+  }
+
   /// Initializes how user can scroll the widget.
   pub fn with_scrollable<K: ?Sized>(
     &mut self, v: impl RInto<PipeValue<Scrollable>, K>,
@@ -1140,6 +1177,16 @@ impl<T> FatObj<T> {
     part_writer!(&mut widget.disabled)
   }
 
+  pub fn width(&mut self) -> impl StateWriter<Value = Option<Measure>> {
+    let widget = sub_widget!(self, fixed_size);
+    part_writer!(&mut widget.width)
+  }
+
+  pub fn height(&mut self) -> impl StateWriter<Value = Option<Measure>> {
+    let widget = sub_widget!(self, fixed_size);
+    part_writer!(&mut widget.height)
+  }
+
   /// Helper method to reduce code duplication for focus-related state watchers
   fn mix_flags_watcher<R: 'static>(
     &mut self, mapper: fn(&MixFlags) -> PartRef<R>,
@@ -1325,6 +1372,7 @@ impl<'a> FatObj<Widget<'a>> {
       host
         + [
           class,
+          fixed_size,
           constrained_box,
           tooltips,
           margin,
