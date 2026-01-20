@@ -259,7 +259,7 @@ struct Viewport {
 }
 
 impl Render for Viewport {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     let mut child_clamp = clamp;
     if self.scroll_dir != Scrollable::X {
       child_clamp.max.height = f32::INFINITY;
@@ -268,7 +268,7 @@ impl Render for Viewport {
       child_clamp.max.width = f32::INFINITY;
     }
 
-    let mut size = ctx.assert_perform_single_child_layout(child_clamp);
+    let mut size = ctx.assert_measure_single_child(child_clamp);
     if self.scroll_dir != Scrollable::X && clamp.max.height.is_infinite() {
       size.height = clamp.container_height(size.height);
     }
@@ -283,6 +283,8 @@ impl Render for Viewport {
 
     size
   }
+
+  fn layout(&self, _size: Size, ctx: &mut LayoutCtx) { ctx.layout_single_child(); }
 }
 
 #[cfg(test)]
@@ -343,10 +345,12 @@ mod tests {
 
   impl Render for FixedBox {
     #[inline]
-    fn perform_layout(&self, _: BoxClamp, ctx: &mut LayoutCtx) -> Size {
-      ctx.perform_single_child_layout(BoxClamp { min: self.size, max: self.size });
+    fn measure(&self, _: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+      ctx.measure_single_child(BoxClamp { min: self.size, max: self.size });
       self.size
     }
+    #[inline]
+    fn layout(&self, _size: Size, ctx: &mut LayoutCtx) { ctx.layout_single_child(); }
     #[inline]
     fn size_affected_by_child(&self) -> bool { false }
     #[inline]

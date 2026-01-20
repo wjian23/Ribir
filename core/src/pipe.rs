@@ -329,12 +329,19 @@ impl<V: 'static> Pipe<V> {
     #[derive(MultiChild)]
     struct TmpParent;
     impl Render for TmpParent {
-      fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+      fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
         let (ctx, children) = ctx.split_children();
         for c in children {
-          ctx.perform_child_layout(c, clamp);
+          ctx.measure_child(c, clamp);
         }
         Size::new(0., 0.)
+      }
+
+      fn layout(&self, _size: Size, ctx: &mut LayoutCtx) {
+        let (ctx, children) = ctx.split_children();
+        for c in children {
+          ctx.layout_child(c);
+        }
       }
     }
 
@@ -548,9 +555,11 @@ impl Query for PipeNode {
 }
 
 impl Render for PipeNode {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
-    self.as_ref().data.perform_layout(clamp, ctx)
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+    self.as_ref().data.measure(clamp, ctx)
   }
+
+  fn layout(&self, size: Size, ctx: &mut LayoutCtx) { self.as_ref().data.layout(size, ctx) }
 
   fn visual_box(&self, ctx: &mut VisualCtx) -> Option<Rect> { self.as_ref().data.visual_box(ctx) }
 
@@ -895,7 +904,7 @@ mod tests {
     }
 
     impl Render for TaskWidget {
-      fn perform_layout(&self, _: BoxClamp, _: &mut LayoutCtx) -> Size {
+      fn measure(&self, _: BoxClamp, _: &mut LayoutCtx) -> Size {
         self.layout_cnt.set(self.layout_cnt.get() + 1);
         Size::new(1., 1.)
       }

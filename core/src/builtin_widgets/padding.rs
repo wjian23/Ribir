@@ -38,14 +38,14 @@ impl Declare for Padding {
 impl_compose_child_for_wrap_render!(Padding);
 
 impl WrapRender for Padding {
-  fn perform_layout(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
     let thickness = self.padding.thickness();
 
     let min = (clamp.min - thickness).max(ZERO_SIZE);
     let max = (clamp.max - thickness).max(ZERO_SIZE);
     // Shrink the clamp of child.
     let child_clamp = BoxClamp { min, max };
-    let size = host.perform_layout(child_clamp, ctx);
+    let size = host.measure(child_clamp, ctx);
     clamp.clamp(size + thickness)
   }
 

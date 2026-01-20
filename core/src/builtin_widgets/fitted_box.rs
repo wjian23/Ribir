@@ -77,10 +77,10 @@ impl FittedBox {
       clamp.min
     } else {
       self.scale_factor.set(Vector::one());
-      return ctx.assert_perform_single_child_layout(clamp);
+      return ctx.assert_measure_single_child(clamp);
     };
 
-    let child_size = ctx.assert_perform_single_child_layout(BoxClamp::default());
+    let child_size = ctx.assert_measure_single_child(BoxClamp::default());
 
     if !min_valid(child_size) {
       self.scale_factor.set(Vector::one());
@@ -108,11 +108,11 @@ impl FittedBox {
 }
 
 impl Render for FittedBox {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     match self.box_fit {
       BoxFit::None => {
         self.scale_factor.set(Vector::one());
-        ctx.assert_perform_single_child_layout(clamp)
+        ctx.assert_measure_single_child(clamp)
       }
       BoxFit::Fill => self.layout_child(
         clamp,
@@ -165,6 +165,8 @@ impl Render for FittedBox {
       ),
     }
   }
+
+  fn layout(&self, _size: Size, ctx: &mut LayoutCtx) { ctx.layout_single_child(); }
 
   fn visual_box(&self, ctx: &mut VisualCtx) -> Option<Rect> {
     let clip_rect = Rect::from_size(ctx.box_size()?);

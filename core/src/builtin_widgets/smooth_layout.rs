@@ -161,15 +161,13 @@ where
 macro_rules! smooth_size_widget_impl {
   ($name:ident) => {
     impl WrapRender for $name {
-      fn perform_layout(
-        &self, mut clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx,
-      ) -> Size {
+      fn measure(&self, mut clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
         if !ctx
           .window()
           .flags()
           .contains(WindowFlags::ANIMATIONS)
         {
-          return host.perform_layout(clamp, ctx);
+          return host.measure(clamp, ctx);
         }
 
         self.switch_init_to_value(clamp.max);
@@ -181,7 +179,7 @@ macro_rules! smooth_size_widget_impl {
             self.0.set_force_layout(false);
           }
 
-          let size = host.perform_layout(clamp, ctx);
+          let size = host.measure(clamp, ctx);
           // We need to modify the real size to trigger the animation, but we will
           // delay this action until the next frame begins to avoid disturbing the
           // layout and animation logic.
@@ -192,7 +190,7 @@ macro_rules! smooth_size_widget_impl {
         }
 
         self.clamp_layout_clamp(&mut clamp);
-        host.perform_layout(clamp, ctx)
+        host.measure(clamp, ctx)
       }
 
       fn dirty_phase(&self, host: &dyn Render) -> DirtyPhase {
@@ -210,13 +208,13 @@ macro_rules! smooth_size_widget_impl {
 macro_rules! smooth_pos_widget_impl {
   ($name:ident) => {
     impl WrapRender for $name {
-      fn perform_layout(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
+      fn measure(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
         if !ctx
           .window()
           .flags()
           .contains(WindowFlags::ANIMATIONS)
         {
-          return host.perform_layout(clamp, ctx);
+          return host.measure(clamp, ctx);
         }
 
         let SmoothImpl { force_layout, running, .. } = *self.0.read();
@@ -249,7 +247,7 @@ macro_rules! smooth_pos_widget_impl {
           });
         }
 
-        let size = host.perform_layout(clamp, ctx);
+        let size = host.measure(clamp, ctx);
         self.switch_init_to_value(size, clamp.max);
         size
       }

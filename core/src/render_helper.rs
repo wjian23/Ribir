@@ -32,9 +32,12 @@ where
   T: RenderProxy + 'static,
 {
   #[inline]
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
-    self.proxy().perform_layout(clamp, ctx)
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+    self.proxy().measure(clamp, ctx)
   }
+
+  #[inline]
+  fn layout(&self, size: Size, ctx: &mut LayoutCtx) { self.proxy().layout(size, ctx) }
 
   #[inline]
   fn visual_box(&self, ctx: &mut VisualCtx) -> Option<Rect> { self.proxy().visual_box(ctx) }
@@ -67,7 +70,7 @@ impl<R: Render> RenderProxy for Rc<R> {
 }
 
 impl Render for Resource<Path> {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     let line_width = Provider::of::<PaintingStyle>(ctx).and_then(|p| p.line_width());
     let size = self
       .bounds(line_width)

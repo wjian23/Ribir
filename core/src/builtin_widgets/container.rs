@@ -25,13 +25,15 @@ use crate::prelude::*;
 pub struct Container;
 
 impl Render for Container {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     let size = clamp.max;
     let child_clamp = BoxClamp::max_size(size);
 
-    ctx.perform_single_child_layout(child_clamp);
+    ctx.measure_single_child(child_clamp);
     size
   }
+
+  fn layout(&self, _size: Size, ctx: &mut LayoutCtx) { ctx.layout_single_child(); }
 
   #[inline]
   fn size_affected_by_child(&self) -> bool { false }

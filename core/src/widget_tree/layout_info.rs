@@ -565,12 +565,17 @@ mod tests {
   }
 
   impl Render for OffsetBox {
-    fn perform_layout(&self, mut clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+    fn measure(&self, mut clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
       clamp.max = clamp.max.min(self.size);
       let child = ctx.assert_single_child();
-      ctx.perform_child_layout(child, clamp);
-      ctx.update_anchor(child, AnchorX::new(self.offset.x), AnchorY::new(self.offset.y));
+      ctx.measure_child(child, clamp);
       self.size
+    }
+
+    fn layout(&self, _size: Size, ctx: &mut LayoutCtx) {
+      let child = ctx.assert_single_child();
+      ctx.update_anchor(child, AnchorX::new(self.offset.x), AnchorY::new(self.offset.y));
+      ctx.layout_child(child);
     }
 
     #[inline]

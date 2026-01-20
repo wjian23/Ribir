@@ -6,7 +6,7 @@ pub struct TransformBox {
 }
 
 impl Render for TransformBox {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     self
       .matrix
       .inverse()
@@ -19,13 +19,15 @@ impl Render for TransformBox {
 
         let child_clamp = BoxClamp { min, max };
 
-        let size = ctx.assert_perform_single_child_layout(child_clamp);
+        let size = ctx.assert_measure_single_child(child_clamp);
         let rect = self
           .matrix
           .outer_transformed_rect(&Rect::from_size(size));
         rect.size
       })
   }
+
+  fn layout(&self, _size: Size, ctx: &mut LayoutCtx) { ctx.layout_single_child(); }
 
   #[inline]
   fn visual_box(&self, ctx: &mut VisualCtx) -> Option<Rect> {

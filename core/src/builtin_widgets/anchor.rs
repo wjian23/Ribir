@@ -47,8 +47,8 @@ impl Declare for Anchor {
 impl_compose_child_for_wrap_render!(Anchor);
 
 impl WrapRender for Anchor {
-  fn perform_layout(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
-    let child_size = host.perform_layout(clamp, ctx);
+  fn measure(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
+    let child_size = host.measure(clamp, ctx);
 
     if let Some(x) = self.x.clone() {
       ctx.update_anchor_x(ctx.widget_id(), x);
@@ -160,8 +160,8 @@ impl<T: 'static> ObjDeclarer for CustomAnchorDeclarer<T> {
 }
 
 impl<T: 'static> WrapRender for CustomAnchor<T> {
-  fn perform_layout(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
-    let child_size = host.perform_layout(clamp, ctx);
+  fn measure(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
+    let child_size = host.measure(clamp, ctx);
     let anchor = (self.anchor)(&self.data, child_size, clamp, ctx);
     if let Some(x) = anchor.x {
       ctx.update_anchor_x(ctx.widget_id(), x);

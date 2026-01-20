@@ -235,16 +235,24 @@ impl TestShellWindow {
 pub struct MockStack {}
 
 impl Render for MockStack {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     let mut size = ZERO_SIZE;
     let (ctx, children) = ctx.split_children();
     for c in children {
-      let child_size = ctx.perform_child_layout(c, clamp);
+      let child_size = ctx.measure_child(c, clamp);
       size = size.max(child_size);
     }
 
     size
   }
+
+  fn layout(&self, _size: Size, ctx: &mut LayoutCtx) {
+    let (ctx, children) = ctx.split_children();
+    for c in children {
+      ctx.layout_child(c);
+    }
+  }
+
   fn paint(&self, _: &mut PaintingCtx) {}
 }
 
@@ -257,12 +265,11 @@ pub struct MockBox {
 }
 
 impl Render for MockMulti {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     let mut size = ZERO_SIZE;
     let (ctx, children) = ctx.split_children();
     for c in children {
-      let child_size = ctx.perform_child_layout(c, clamp);
-      ctx.update_anchor(c, AnchorX::new(size.width), AnchorY::new(0.));
+      let child_size = ctx.measure_child(c, clamp);
       size.width += child_size.width;
       size.height = size.height.max(child_size.height);
     }
@@ -270,17 +277,31 @@ impl Render for MockMulti {
     size
   }
 
+  fn layout(&self, _size: Size, ctx: &mut LayoutCtx) {
+    let (ctx, children) = ctx.split_children();
+    let mut x = 0.;
+    for c in children {
+      let child_size = ctx.widget_box_size(c).unwrap();
+      ctx.update_anchor(c, AnchorX::new(x), AnchorY::new(0.));
+      ctx.layout_child(c);
+      x += child_size.width;
+    }
+  }
+
   fn paint(&self, _: &mut PaintingCtx) {}
 }
 
 impl Render for MockBox {
-  fn perform_layout(&self, mut clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, mut clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     let size = clamp.clamp(self.size);
     clamp.max = clamp.max.min(size);
-    ctx.perform_single_child_layout(clamp);
+    ctx.measure_single_child(clamp);
 
     size
   }
+
+  fn layout(&self, _size: Size, ctx: &mut LayoutCtx) { ctx.layout_single_child(); }
+
   #[inline]
   fn size_affected_by_child(&self) -> bool { false }
 

@@ -38,7 +38,7 @@ impl Declare for FixedSize {
 impl_compose_child_for_wrap_render!(FixedSize);
 
 impl WrapRender for FixedSize {
-  fn perform_layout(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
     let mut new_clamp = clamp;
     if let Some(w) = self.width {
       let fixed_w = w.into_pixel(clamp.max.width);
@@ -48,7 +48,7 @@ impl WrapRender for FixedSize {
       let fixed_h = h.into_pixel(clamp.max.height);
       new_clamp = new_clamp.with_fixed_height(fixed_h);
     }
-    host.perform_layout(new_clamp, ctx)
+    host.measure(new_clamp, ctx)
   }
 
   #[inline]

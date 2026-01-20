@@ -57,22 +57,47 @@ pub struct Column {
 }
 
 impl Render for Row {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
-    perform_linear_layout(Direction::Horizontal, self.align_items, self.justify_content, clamp, ctx)
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+    perform_linear_measure(
+      Direction::Horizontal,
+      self.align_items,
+      self.justify_content,
+      clamp,
+      ctx,
+    )
+  }
+
+  fn layout(&self, _size: Size, ctx: &mut LayoutCtx) {
+    perform_linear_layout_positions(
+      Direction::Horizontal,
+      self.align_items,
+      self.justify_content,
+      _size,
+      ctx,
+    )
   }
 }
 
 impl Render for Column {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
-    perform_linear_layout(Direction::Vertical, self.align_items, self.justify_content, clamp, ctx)
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+    perform_linear_measure(Direction::Vertical, self.align_items, self.justify_content, clamp, ctx)
+  }
+
+  fn layout(&self, _size: Size, ctx: &mut LayoutCtx) {
+    perform_linear_layout_positions(
+      Direction::Vertical,
+      self.align_items,
+      self.justify_content,
+      _size,
+      ctx,
+    )
   }
 }
 
-/// Core layout algorithm for linear arrangements (both rows and columns).
+/// Core measure algorithm for linear arrangements (both rows and columns).
 ///
-/// Implements a two-phase layout process:
-/// 1. **Measurement Phase**: Calculate total content size and child constraints
-/// 2. **Placement Phase**: Position children according to alignment rules
+/// Implements the measurement phase:
+/// 1. Calculate total content size and child constraints
 ///
 /// # Parameters
 /// - `dir`: Layout direction (horizontal/vertical)
@@ -80,8 +105,8 @@ impl Render for Column {
 /// - `justify_content`: Main-axis space distribution
 /// - `clamp`: Size constraints from parent
 /// - `ctx`: Layout context for children measurement
-fn perform_linear_layout(
-  dir: Direction, align_items: Align, justify_content: JustifyContent, clamp: BoxClamp,
+fn perform_linear_measure(
+  dir: Direction, align_items: Align, _justify_content: JustifyContent, clamp: BoxClamp,
   ctx: &mut LayoutCtx,
 ) -> Size {
   let cross_max = dir.cross_max_of(&clamp);
@@ -94,28 +119,48 @@ fn perform_linear_layout(
   let (ctx, children) = ctx.split_children();
   let (mut main, mut cross) = (0., 0f32);
   for child in children {
-    let child_size = ctx.perform_child_layout(child, child_clamp);
+    let child_size = ctx.measure_child(child, child_clamp);
     main += dir.main_of(child_size);
     cross = cross.max(dir.cross_of(child_size));
   }
 
-  let child_cnt = ctx.children().count();
-  let main_container = dir.container_main(&clamp, main);
-  let (mut main_pos, step) = justify_content.item_offset_and_step(main_container - main, child_cnt);
-
-  let (ctx, children) = ctx.split_children();
+  let main = dir.main_clamp(main, &clamp);
   let cross = dir.cross_clamp(cross, &clamp);
+  dir.to_size(main, cross)
+}
+
+/// Core layout algorithm for positioning children in linear arrangements.
+///
+/// # Parameters
+/// - `dir`: Layout direction (horizontal/vertical)
+/// - `align_items`: Cross-axis alignment strategy
+/// - `justify_content`: Main-axis space distribution
+/// - `size`: Container size (calculated in measure phase)
+/// - `ctx`: Layout context for positioning children
+fn perform_linear_layout_positions(
+  dir: Direction, align_items: Align, justify_content: JustifyContent, size: Size,
+  ctx: &mut LayoutCtx,
+) {
+  let child_cnt = ctx.children().count();
+  let main_container = dir.main_of(size);
+
+  // Calculate total main size from children
+  let (ctx, children) = ctx.split_children();
+  let total_main: f32 = children
+    .map(|c| dir.main_of(ctx.widget_box_size(c).unwrap()))
+    .sum();
+  let (mut main_pos, step) =
+    justify_content.item_offset_and_step(main_container - total_main, child_cnt);
+
+  let cross = dir.cross_of(size);
+  let (ctx, children) = ctx.split_children();
   for child in children {
     let child_size = ctx.widget_box_size(child).unwrap();
     let cross_pos = align_items.align_value(dir.cross_of(child_size), cross);
 
     let pos = dir.to_point(main_pos, cross_pos);
     ctx.update_anchor(child, AnchorX::new(pos.x), AnchorY::new(pos.y));
+    ctx.layout_child(child);
     main_pos += dir.main_of(child_size) + step;
   }
-
-  let main = dir.main_clamp(main, &clamp);
-  let main = if justify_content.is_space_layout() { main_container } else { main };
-
-  dir.to_size(main, cross)
 }

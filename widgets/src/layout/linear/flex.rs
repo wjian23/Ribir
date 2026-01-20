@@ -93,7 +93,7 @@ pub struct Flex {
 }
 
 impl Render for Flex {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     if Align::Stretch == self.align_items && self.wrap {
       warn!("stretch align and wrap property is conflict");
     }
@@ -110,7 +110,23 @@ impl Render for Flex {
       lines: vec![],
       has_flex: false,
     };
-    layouter.layout(clamp, ctx)
+    layouter.measure_children(clamp, ctx)
+  }
+
+  fn layout(&self, size: Size, ctx: &mut LayoutCtx) {
+    let mut layouter = FlexLayouter {
+      reverse: self.reverse,
+      dir: self.direction,
+      align_items: self.align_items,
+      justify_content: self.justify_content,
+      wrap: self.wrap,
+      main_axis_gap: self.item_gap,
+      cross_axis_gap: self.line_gap,
+      current_line: <_>::default(),
+      lines: vec![],
+      has_flex: false,
+    };
+    layouter.layout_children(size, ctx)
   }
 
   #[inline]
@@ -131,16 +147,34 @@ struct FlexLayouter {
 }
 
 impl FlexLayouter {
-  fn layout(&mut self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure_children(&mut self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     let dir = self.dir;
 
     let main_max = dir.max_of(&clamp);
 
     let child_clamp = self.create_child_clamp(clamp);
-    self.perform_children_layout(main_max, child_clamp, ctx);
+    self.perform_children_measure(main_max, child_clamp, ctx);
     if self.has_flex {
       let container = dir.container_main(&clamp, self.main_size());
-      self.flex_layout(container, main_max, child_clamp, ctx);
+      self.flex_measure(container, main_max, child_clamp, ctx);
+    }
+
+    let expect = self.finally_size(main_max);
+    clamp.clamp(expect)
+  }
+
+  fn layout_children(&mut self, size: Size, ctx: &mut LayoutCtx) {
+    // Rebuild flex info by measuring again
+    let dir = self.dir;
+    let clamp = BoxClamp::fixed_size(size);
+    let main_max = dir.max_of(&clamp);
+    let child_clamp = self.create_child_clamp(clamp);
+
+    // Re-measure to populate lines info
+    self.perform_children_measure(main_max, child_clamp, ctx);
+    if self.has_flex {
+      let container = dir.main_of(size);
+      self.flex_measure(container, main_max, child_clamp, ctx);
     }
 
     let expect = self.finally_size(main_max);
@@ -149,7 +183,6 @@ impl FlexLayouter {
       .align_items
       .align_value(dir.cross_of(expect), dir.cross_of(real));
     self.update_children_position(dir.main_of(real), cross_box_offset, ctx);
-    real
   }
 
   /// Creates child constraints based on wrapping behavior:
@@ -173,7 +206,7 @@ impl FlexLayouter {
     }
   }
 
-  fn perform_children_layout(&mut self, max_main: f32, clamp: BoxClamp, ctx: &mut LayoutCtx) {
+  fn perform_children_measure(&mut self, max_main: f32, clamp: BoxClamp, ctx: &mut LayoutCtx) {
     let (ctx, children) = ctx.split_children();
     let &mut Self { wrap, dir, .. } = self;
     let mut children = children.peekable();
@@ -194,7 +227,7 @@ impl FlexLayouter {
       let size = if expanded.is_some_and(|e| e.defer_alloc) {
         Size::zero()
       } else {
-        ctx.perform_child_layout(c, clamp)
+        ctx.measure_child(c, clamp)
       };
       let main = dir.main_of(size);
       if wrap && !line.is_empty() && line.main + main > max_main {
@@ -224,7 +257,7 @@ impl FlexLayouter {
     self.place_line();
   }
 
-  fn flex_layout(&mut self, container: f32, max: f32, clamp: BoxClamp, ctx: &mut LayoutCtx) {
+  fn flex_measure(&mut self, container: f32, max: f32, clamp: BoxClamp, ctx: &mut LayoutCtx) {
     let (ctx, mut children) = ctx.split_children();
     let dir = self.dir;
 
@@ -251,7 +284,7 @@ impl FlexLayouter {
           continue;
         };
 
-        info.size = ctx.perform_child_layout(child, item_clamp);
+        info.size = ctx.measure_child(child, item_clamp);
         line.main += dir.main_of(info.size) - item_main;
       }
     });

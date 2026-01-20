@@ -28,8 +28,8 @@ pub struct Clip {
 impl Render for Clip {
   fn size_affected_by_child(&self) -> bool { false }
 
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
-    ctx.assert_perform_single_child_layout(clamp);
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+    ctx.assert_measure_single_child(clamp);
     self
       .clip_path
       .bounds(None)
@@ -37,6 +37,8 @@ impl Render for Clip {
       .to_tuple()
       .into()
   }
+
+  fn layout(&self, _size: Size, ctx: &mut LayoutCtx) { ctx.layout_single_child(); }
 
   fn paint(&self, ctx: &mut PaintingCtx) { ctx.painter().clip(self.clip_path.clone().into()); }
 

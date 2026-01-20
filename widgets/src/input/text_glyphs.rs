@@ -66,7 +66,7 @@ impl<T: VisualText> TextGlyphs<T> {
 }
 
 impl<T: VisualText + 'static> Render for TextGlyphs<T> {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     let glyphs = self.text.layout_glyphs(clamp, ctx);
     let size = glyphs.visual_rect().size;
     *self.glyphs.borrow_mut() = Some(glyphs);

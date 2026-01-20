@@ -59,7 +59,7 @@ pub enum StackFit {
 }
 
 impl Render for Stack {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     // Determine appropriate clamp based on stack fit
     let stack_clamp = match self.fit {
       StackFit::Loose => clamp.loose(),
@@ -89,7 +89,7 @@ impl Render for Stack {
     let stack_size = regulars
       .into_iter()
       .fold(ZERO_SIZE, |max_size, child| {
-        let child_size = ctx.perform_child_layout(child, stack_clamp);
+        let child_size = ctx.measure_child(child, stack_clamp);
         max_size.max(child_size)
       });
 
@@ -99,10 +99,17 @@ impl Render for Stack {
     if !in_parents.is_empty() {
       let parent_relative_clamp = BoxClamp::max_size(stack_size);
       in_parents.into_iter().for_each(|child| {
-        ctx.perform_child_layout(child, parent_relative_clamp);
+        ctx.measure_child(child, parent_relative_clamp);
       });
     }
     stack_size
+  }
+
+  fn layout(&self, _size: Size, ctx: &mut LayoutCtx) {
+    let (ctx, children) = ctx.split_children();
+    for child in children {
+      ctx.layout_child(child);
+    }
   }
 }
 

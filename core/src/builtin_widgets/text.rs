@@ -77,7 +77,7 @@ pub fn paint_text(
 }
 
 impl Render for Text {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     let style = Provider::of::<TextStyle>(ctx).unwrap();
     let text_align = Provider::of::<TextAlign>(ctx).map_or(TextAlign::Start, |t| *t);
     let mut glyphs = text_glyph(self.text.substr(..), &style, text_align, clamp.max);

@@ -105,7 +105,10 @@ impl WidgetTree {
 
           let mut ctx = LayoutCtx::new(wid, self, laid_out_queue);
           let visual_rect = ctx.visual_box(wid);
-          ctx.perform_layout(clamp);
+          // Phase 1: Measure
+          let size = ctx.measure(clamp);
+          // Phase 2: Layout
+          ctx.layout(size);
           let new_rect = ctx.visual_box(wid);
           if visual_rect != new_rect
             && let Some(parent) = wid.parent(self)
@@ -318,13 +321,20 @@ impl DirtyMarker {
 pub(crate) struct Root;
 
 impl Render for Root {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     let (ctx, children) = ctx.split_children();
     for c in children {
-      ctx.perform_child_layout(c, clamp);
+      ctx.measure_child(c, clamp);
     }
 
     clamp.max
+  }
+
+  fn layout(&self, _size: Size, ctx: &mut LayoutCtx) {
+    let (ctx, children) = ctx.split_children();
+    for c in children {
+      ctx.layout_child(c);
+    }
   }
 }
 
@@ -550,7 +560,7 @@ mod tests {
     }
 
     impl Render for DirtyPaintOnly {
-      fn perform_layout(&self, clamp: BoxClamp, _: &mut LayoutCtx) -> Size { clamp.max }
+      fn measure(&self, clamp: BoxClamp, _: &mut LayoutCtx) -> Size { clamp.max }
 
       fn paint(&self, _: &mut PaintingCtx) { self.paint_cnt.set(self.paint_cnt.get() + 1); }
 
@@ -590,10 +600,12 @@ mod tests {
 
   impl Render for FixedSizeBox {
     #[inline]
-    fn perform_layout(&self, _: BoxClamp, ctx: &mut LayoutCtx) -> Size {
-      ctx.perform_single_child_layout(BoxClamp { min: self.size, max: self.size });
+    fn measure(&self, _: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+      ctx.measure_single_child(BoxClamp { min: self.size, max: self.size });
       self.size
     }
+
+    fn layout(&self, _size: Size, ctx: &mut LayoutCtx) { ctx.layout_single_child(); }
 
     #[inline]
     fn size_affected_by_child(&self) -> bool { true }

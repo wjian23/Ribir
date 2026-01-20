@@ -14,9 +14,11 @@ use crate::prelude::*;
 /// child size, it can be implemented as a `WrapRender` instead of `Render`,
 /// eliminating the need to allocate a node in the widget tree.
 pub trait WrapRender {
-  fn perform_layout(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
-    host.perform_layout(clamp, ctx)
+  fn measure(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
+    host.measure(clamp, ctx)
   }
+
+  fn layout(&self, size: Size, host: &dyn Render, ctx: &mut LayoutCtx) { host.layout(size, ctx) }
 
   fn paint(&self, host: &dyn Render, ctx: &mut PaintingCtx) { host.paint(ctx) }
 
@@ -92,10 +94,16 @@ impl Query for RenderPair {
 }
 
 impl Render for RenderPair {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     self
       .wrapper
-      .perform_layout(clamp, self.host.as_render(), ctx)
+      .measure(clamp, self.host.as_render(), ctx)
+  }
+
+  fn layout(&self, size: Size, ctx: &mut LayoutCtx) {
+    self
+      .wrapper
+      .layout(size, self.host.as_render(), ctx)
   }
 
   fn visual_box(&self, ctx: &mut VisualCtx) -> Option<Rect> {
@@ -128,8 +136,12 @@ where
   R: StateReader,
   R::Value: WrapRender,
 {
-  fn perform_layout(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
-    self.read().perform_layout(clamp, host, ctx)
+  fn measure(&self, clamp: BoxClamp, host: &dyn Render, ctx: &mut LayoutCtx) -> Size {
+    self.read().measure(clamp, host, ctx)
+  }
+
+  fn layout(&self, size: Size, host: &dyn Render, ctx: &mut LayoutCtx) {
+    self.read().layout(size, host, ctx)
   }
 
   fn paint(&self, host: &dyn Render, ctx: &mut PaintingCtx) { self.read().paint(host, ctx) }

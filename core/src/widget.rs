@@ -29,7 +29,7 @@ pub trait Compose {
 /// painting logic, or hit testing behavior. The framework calls these methods
 /// during different phases of the rendering pipeline.
 pub trait Render: 'static {
-  /// Calculate widget layout within constraints
+  /// Measure the widget and its children to determine its own size.
   ///
   /// # Parameters
   /// - `clamp`: Size constraints from parent
@@ -38,13 +38,29 @@ pub trait Render: 'static {
   /// # Implementation Guide
   /// 1. **Constraint Handling**:
   ///    - Respect clamp.min/max boundaries
-  /// 2. **Child Management**:
-  ///    - Call `ctx.perform_layout()` for each child
-  ///    - Set child positions via `LayoutCtx`
+  /// 2. **Child Measurement**:
+  ///    - Call `ctx.measure_child()` for each child to get their sizes
   /// 3. **Size Safety**:
   ///    - Never return infinite/NaN sizes
   ///    - Fall back to clamp limits for invalid calculations
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size;
+  ///
+  /// **Note**: Do NOT set child positions in this method. Use `layout` for
+  /// that.
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size;
+
+  /// Arrange children within the widget's bounds.
+  ///
+  /// # Parameters
+  /// - `size`: The widget's own size (as returned by `measure`)
+  /// - `ctx`: Layout context for positioning children
+  ///
+  /// # Implementation Guide
+  /// 1. Calculate child positions based on the widget's size and child sizes
+  /// 2. Call `ctx.update_anchor(child, ...)` to set each child's position
+  /// 3. Call `ctx.layout_child(child)` to recursively layout each child
+  ///
+  /// Default implementation does nothing (suitable for leaf widgets).
+  fn layout(&self, _size: Size, _ctx: &mut LayoutCtx) {}
 
   /// Custom painting implementation
   ///

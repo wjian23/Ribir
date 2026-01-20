@@ -42,11 +42,8 @@ impl Declare for Margin {
 }
 
 impl Render for Margin {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
     let Some(child) = ctx.single_child() else { return clamp.min };
-
-    // Reset child position before layout
-    ctx.update_anchor(child, AnchorX::default(), AnchorY::default());
 
     let thickness = self.margin.thickness().min(clamp.max);
     let min = (clamp.min - thickness).max(ZERO_SIZE);
@@ -54,15 +51,17 @@ impl Render for Margin {
 
     // Shrink the clamp of child.
     let child_clamp = BoxClamp { min, max };
-    let size = ctx.perform_child_layout(child, child_clamp);
-
-    // Get current position and add margin offset
-    let (pos_x, pos_y) = ctx.anchor(child).unwrap_or_default();
-    let pos_x = pos_x.offset(self.margin.left);
-    let pos_y = pos_y.offset(self.margin.top);
-    ctx.update_anchor(child, pos_x, pos_y);
+    let size = ctx.measure_child(child, child_clamp);
 
     size + thickness
+  }
+
+  fn layout(&self, _size: Size, ctx: &mut LayoutCtx) {
+    let Some(child) = ctx.single_child() else { return };
+
+    // Reset child position before layout and add margin offset
+    ctx.update_anchor(child, AnchorX::new(self.margin.left), AnchorY::new(self.margin.top));
+    ctx.layout_child(child);
   }
 }
 
