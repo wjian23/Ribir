@@ -39,7 +39,8 @@ use super::*;
 ///     @BorderWidget {
 ///       border: Border::all(BorderSide::new(1., Color::BLACK.into())),
 ///       @Container {
-///         size: Size::new(100., 100.),
+///         width: 100.,
+///         height: 100.,
 ///       }
 ///     }
 ///   }

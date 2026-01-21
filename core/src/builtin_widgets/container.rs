@@ -1,6 +1,11 @@
 use crate::prelude::*;
 
-/// A simple container widget with a fixed size for its child.
+/// A container widget that sizes itself to the maximum allowed by its clamp
+/// constraints.
+///
+/// Container's size is determined by `clamp.max`, making it ideal for creating
+/// fixed-size boxes when combined with the `width` and `height` builtin
+/// attributes.
 ///
 /// # Example
 ///
@@ -10,20 +15,21 @@ use crate::prelude::*;
 /// use ribir::prelude::*;
 ///
 /// container! {
-///   size: Size::new(100., 100.),
+///   width: 100.,
+///   height: 100.,
 ///   background: Color::BLUE,
 ///   @Text { text: "Hello" }
 /// };
 /// ```
-#[derive(Declare, SingleChild)]
-pub struct Container {
-  pub size: Size,
-}
+#[derive(Declare, SingleChild, Clone, Default)]
+pub struct Container;
 
 impl Render for Container {
-  fn perform_layout(&self, clamp: BoxClamp, ctx: &mut LayoutCtx) -> Size {
-    let size = clamp.clamp(self.size);
-    ctx.perform_single_child_layout(BoxClamp::max_size(size));
+  fn measure(&self, clamp: BoxClamp, ctx: &mut MeasureCtx) -> Size {
+    let size = clamp.max;
+    let child_clamp = BoxClamp::max_size(size);
+
+    ctx.perform_single_child_layout(child_clamp);
     size
   }
 
@@ -38,11 +44,39 @@ mod tests {
   use super::*;
   use crate::test_helper::*;
 
-  const SIZE: Size = Size::new(100., 100.);
+  const TEST_SIZE: Size = Size::new(100., 100.);
 
   widget_layout_test!(
     smoke,
-    WidgetTester::new(fn_widget! { @Container { size: SIZE }}),
-    LayoutCase::default().with_size(SIZE)
+    WidgetTester::new(fn_widget! {
+      @Container {
+        width: 100.,
+        height: 100.,
+      }
+    }),
+    LayoutCase::default().with_size(TEST_SIZE)
+  );
+
+  widget_layout_test!(
+    container_with_clamp,
+    WidgetTester::new(fn_widget! {
+      @Container {
+        clamp: BoxClamp::fixed_size(Size::new(200., 150.)),
+      }
+    }),
+    LayoutCase::default().with_size(Size::new(200., 150.))
+  );
+
+  widget_layout_test!(
+    container_with_percent_width,
+    WidgetTester::new(fn_widget! {
+      @Container {
+        clamp: BoxClamp::max_width(400.),
+        width: 0.5.percent(),
+        height: 100.,
+      }
+    })
+    .with_wnd_size(Size::new(800., 600.)),
+    LayoutCase::default().with_size(Size::new(200., 100.))
   );
 }

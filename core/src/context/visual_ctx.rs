@@ -1,6 +1,6 @@
 use ribir_geom::{Point, Rect, Size};
 
-use super::{LayoutCtx, WidgetCtxImpl};
+use super::{MeasureCtx, WidgetCtxImpl};
 use crate::{
   prelude::ProviderCtx,
   widget::{VisualBox, WidgetTree},
@@ -22,9 +22,9 @@ impl<'a> WidgetCtxImpl for VisualCtx<'a> {
 }
 
 impl<'a> VisualCtx<'a> {
-  pub(crate) fn from_layout_ctx<'c: 'a, 'b: 'a>(ctx: &'c mut LayoutCtx<'b>) -> Self {
+  pub(crate) fn from_layout_ctx<'c: 'a, 'b: 'a>(ctx: &'c mut MeasureCtx<'b>) -> Self {
     let id = ctx.id();
-    let LayoutCtx { provider_ctx, tree, .. } = ctx;
+    let MeasureCtx { provider_ctx, tree, .. } = ctx;
     Self { id, tree: *tree, provider_ctx, clip_area: None }
   }
 
@@ -91,11 +91,18 @@ impl<'a> VisualCtx<'a> {
   }
 
   fn position(&self, id: WidgetId) -> Option<Point> {
+    // Get parent size for lazy position calculation
+    let parent_size = id
+      .parent(self.tree)
+      .and_then(|p| self.tree.store.layout_info(p))
+      .and_then(|info| info.size)
+      .unwrap_or_default();
+
     self
       .tree
       .store
       .layout_info(id)
-      .map(|info| info.pos)
+      .map(|info| info.calculate_pos(parent_size))
   }
 }
 
