@@ -106,7 +106,7 @@ smallvec = "1.15.0"
 syn = "2.0.87"
 unicode-segmentation = "1.9.0"
 usvg = { version = "0.45.0", default-features = false }
-wgpu = { version = "29.0.0", features = ["webgl"] }
+wgpu = { version = "29.0.1", features = ["webgl"] }
 # Keep workspace `winit` minimal so wasm targets don't inherit desktop backends.
 # Desktop-only backends are enabled by leaf crates that actually open native windows.
 winit = { version = "0.30.11", default-features = false, features = [

@@ -730,6 +730,7 @@ where
   }
 
   fn find_visual(&self, key: CursorKey) -> Option<VisualPosition> {
+    // First try exact match with affinity
     self
       .line_positions()
       .iter()
@@ -740,6 +741,22 @@ where
           .iter()
           .position(|position| position.key == key)
           .map(|slot| VisualPosition { line: LineIndex(line), slot })
+      })
+      .or_else(|| {
+        // Fallback: if exact match fails (e.g., affinity mismatch from programmatic
+        // selection), try matching only the index. This prevents cursor jumping to
+        // beginning when affinity doesn't match.
+        self
+          .line_positions()
+          .iter()
+          .enumerate()
+          .find_map(|(line, positions)| {
+            positions
+              .slots
+              .iter()
+              .position(|position| position.key.index == key.index)
+              .map(|slot| VisualPosition { line: LineIndex(line), slot })
+          })
       })
   }
 
