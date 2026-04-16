@@ -172,43 +172,9 @@ impl RemoteImage {
     let url = self.url.clone();
     let alt = self.alt.clone();
     let max_width = self.max_width;
+    let state = request_image_state(&url);
 
     fn_widget! {
-      let state = Stateful::new(ImageState::Loading);
-
-      // Check cache - returns Ready(result) or Pending(future)
-      let cache_result = {
-        let mut cache = IMAGE_CACHE.write();
-        cache.get_or_start(&url)
-      };
-
-      match cache_result {
-        CacheResult::Ready(Ok(img)) => {
-          *$write(state) = ImageState::Loaded(img);
-        }
-        CacheResult:: Ready(Err(msg)) => {
-          *$write(state) = ImageState::Error(msg);
-        }
-        CacheResult::Pending(rx) => {
-          // Wait for download to complete
-          let _c_url = url.clone();
-          AppCtx::spawn_local(async move {
-            match rx.await {
-              Ok(result) => {
-                match result {
-                  Ok(img) => *$write(state) = ImageState::Loaded(img),
-                  Err(e) => *$write(state) = ImageState::Error(e),
-                }
-              }
-              Err(e) => {
-                *$write(state) = ImageState::Error(format!("Download task failed: {}", e));
-              }
-            }
-          });
-        }
-      }
-
-      // Reactively render based on state
       let alt = alt.clone();
       @ {
         pipe!($read(state);).map(move |_| {
@@ -296,6 +262,39 @@ fn decode_with_image_crate(bytes: &[u8]) -> ImageResult {
     .write_as_webp(&mut webp_bytes)
     .map_err(|e| format!("WebP encode failed: {}", e))?;
   Image::new(webp_bytes).map_err(|e| format!("Image create failed: {}", e))
+}
+
+pub(crate) fn request_image_state(url: &str) -> Stateful<ImageState> {
+  let state = Stateful::new(ImageState::Loading);
+  let cache_result = {
+    let mut cache = IMAGE_CACHE.write();
+    cache.get_or_start(url)
+  };
+
+  match cache_result {
+    CacheResult::Ready(Ok(img)) => {
+      *state.write() = ImageState::Loaded(img);
+    }
+    CacheResult::Ready(Err(msg)) => {
+      *state.write() = ImageState::Error(msg);
+    }
+    CacheResult::Pending(rx) => {
+      let state_for_task = state.clone_writer();
+      AppCtx::spawn_local(async move {
+        match rx.await {
+          Ok(result) => match result {
+            Ok(img) => *state_for_task.write() = ImageState::Loaded(img),
+            Err(e) => *state_for_task.write() = ImageState::Error(e),
+          },
+          Err(e) => {
+            *state_for_task.write() = ImageState::Error(format!("Download task failed: {}", e));
+          }
+        }
+      });
+    }
+  }
+
+  state
 }
 
 fn render_loading_placeholder(alt: &str) -> Widget<'static> {

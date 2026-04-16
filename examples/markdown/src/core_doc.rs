@@ -43,11 +43,11 @@ impl CommandQueue {
     match &cmd {
       PendingCommand::SetText { .. } => {
         // If last is SetText, replace it
-        if let Some(last) = self.commands.back_mut() {
-          if matches!(last, PendingCommand::SetText { .. }) {
-            *last = cmd;
-            return;
-          }
+        if let Some(last) = self.commands.back_mut()
+          && matches!(last, PendingCommand::SetText { .. })
+        {
+          *last = cmd;
+          return;
         }
         self.commands.push_back(cmd);
       }
@@ -162,16 +162,12 @@ impl MarkdownCoreDoc {
   /// Consume pending SetText and commit to document
   /// Returns the EditOp that was generated and pushed to undo stack
   pub fn consume_set_text(&mut self) -> Option<EditOp> {
-    // Find and consume SetText command
-    let text = loop {
-      match self.command_queue.pop() {
-        Some(PendingCommand::SetText { text }) => break text,
-        Some(PendingCommand::Undo | PendingCommand::Redo) => {
-          // Non-SetText commands stay in queue, we're done
-          return None;
-        }
-        None => return None,
-      }
+    let Some(PendingCommand::SetText { .. }) = self.command_queue.commands.front() else {
+      return None;
+    };
+    let text = match self.command_queue.pop() {
+      Some(PendingCommand::SetText { text }) => text,
+      Some(PendingCommand::Undo | PendingCommand::Redo) | None => unreachable!(),
     };
 
     // Generate EditOp from old to new text
@@ -207,12 +203,12 @@ impl MarkdownCoreDoc {
 
     let mut text = self.source.clone();
     let op = self.undo_redo.undo(&mut text)?;
+    let inverse_op = inverse_edit_op(&op);
 
     self.source = text.clone();
     self.version = self.version.saturating_sub(1);
 
-    // Full re-parse for undo
-    self.incremental_parse(&text);
+    self.incremental_parse_with_op(&text, &inverse_op);
 
     // Update pending text to match committed
     *self.pending_text.borrow_mut() = text;
@@ -232,8 +228,7 @@ impl MarkdownCoreDoc {
     self.source = text.clone();
     self.version += 1;
 
-    // Full re-parse for redo
-    self.incremental_parse(&text);
+    self.incremental_parse_with_op(&text, &op);
 
     // Update pending text to match committed
     *self.pending_text.borrow_mut() = text;
@@ -259,12 +254,6 @@ impl MarkdownCoreDoc {
     self.document = MarkdownDocument { nodes };
   }
 
-  /// Parse incrementally (fallback)
-  fn incremental_parse(&mut self, text: &str) {
-    let nodes = self.incremental_parser.parse(text);
-    self.document = MarkdownDocument { nodes };
-  }
-
   /// Get document nodes for rendering
   pub fn document_nodes(&self) -> &Vec<DocumentNode> { &self.document.nodes }
 
@@ -279,9 +268,25 @@ impl Default for MarkdownCoreDoc {
   fn default() -> Self { Self::new("") }
 }
 
+fn inverse_edit_op(edit_op: &EditOp) -> EditOp {
+  EditOp {
+    position: edit_op.position,
+    old_text: edit_op.new_text.clone(),
+    new_text: edit_op.old_text.clone(),
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::{MarkdownNode, parser::parse_full};
+
+  fn summarize(nodes: &[DocumentNode]) -> Vec<(std::ops::Range<usize>, MarkdownNode)> {
+    nodes
+      .iter()
+      .map(|node| (node.source_range.clone(), node.node.clone()))
+      .collect()
+  }
 
   #[test]
   fn test_command_queue_coalescing() {
@@ -336,6 +341,21 @@ mod tests {
   }
 
   #[test]
+  fn test_doc_consume_set_text_preserves_queued_undo_redo() {
+    let mut doc = MarkdownCoreDoc::new("initial");
+    doc.push_undo();
+    doc.push_set_text("modified".to_string());
+
+    assert!(doc.consume_set_text().is_none());
+    assert_eq!(doc.command_queue.len(), 2);
+    assert!(matches!(doc.command_queue.pop(), Some(PendingCommand::Undo)));
+    assert!(matches!(
+      doc.command_queue.pop(),
+      Some(PendingCommand::SetText { text }) if text == "modified"
+    ));
+  }
+
+  #[test]
   fn test_doc_undo_consumes_pending() {
     let mut doc = MarkdownCoreDoc::new("initial");
 
@@ -381,6 +401,25 @@ mod tests {
     // Undo decrements version
     doc.undo();
     assert_eq!(doc.version(), 1);
+  }
+
+  #[test]
+  fn test_undo_redo_reparse_matches_full_parse() {
+    let old = "aaa\n\n# Heading\n";
+    let new = "aa\n\n# Heading\n";
+    let mut doc = MarkdownCoreDoc::new(old);
+
+    doc.push_set_text(new.to_string());
+    doc.consume_set_text();
+    assert_eq!(summarize(doc.document_nodes()), summarize(&parse_full(new)));
+
+    doc.undo();
+    assert_eq!(doc.source(), old);
+    assert_eq!(summarize(doc.document_nodes()), summarize(&parse_full(old)));
+
+    doc.redo();
+    assert_eq!(doc.source(), new);
+    assert_eq!(summarize(doc.document_nodes()), summarize(&parse_full(new)));
   }
 
   #[test]

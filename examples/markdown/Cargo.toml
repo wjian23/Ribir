@@ -22,6 +22,9 @@ rfd = "0.14"
 console_error_panic_hook = "0.1.6"
 wasm-bindgen.workspace = true
 
+[dev-dependencies]
+ribir = { path = "../../ribir", features = ["material", "widgets", "test-utils"] }
+
 [features]
 wgpu = ["ribir/wgpu"]
 debug = ["ribir/debug"]

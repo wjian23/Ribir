@@ -1,11 +1,24 @@
 //! Markdown rendering components
 
+mod mixed_inline;
+mod table;
+
+pub use mixed_inline::MixedInline;
 use ribir::{
   core::text::{FontStyle, FontWeight},
   prelude::*,
 };
 
 use crate::syntax_highlight;
+
+pub(super) const TODO_MARKER_SIZE: f32 = 18.0;
+const TODO_MARKER_ICON_SIZE: f32 = 12.0;
+const TODO_MARKER_RADIUS: f32 = 4.0;
+const TODO_MARKER_GAP_TEXT: &str = " ";
+const LIST_BLOCK_INDENT: f32 = 24.0;
+const LIST_ITEM_SPACING: f32 = 6.0;
+const TODO_INDETERMINATE_BAR_WIDTH: f32 = 8.0;
+const TODO_INDETERMINATE_BAR_HEIGHT: f32 = 2.0;
 
 /// Represents the checked state of a todo list item
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -15,11 +28,53 @@ pub enum TodoState {
   Indeterminate,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MarkdownTodoMarkerVisual {
+  Unchecked,
+  Checked,
+  Indeterminate,
+}
+
+impl MarkdownTodoMarkerVisual {
+  fn from_state(state: &TodoState) -> Self {
+    match state {
+      TodoState::Unchecked => Self::Unchecked,
+      TodoState::Checked => Self::Checked,
+      TodoState::Indeterminate => Self::Indeterminate,
+    }
+  }
+}
+
 /// Represents a single todo list item
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct TodoItem {
   pub state: TodoState,
-  pub text: String,
+  pub inlines: Vec<InlineNode>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Default)]
+pub enum TableAlign {
+  #[default]
+  Start,
+  Center,
+  End,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Default)]
+pub struct TableCell {
+  pub inlines: Vec<InlineNode>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Default)]
+pub struct TableRow {
+  pub cells: Vec<TableCell>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Default)]
+pub struct MarkdownTableData {
+  pub alignments: Vec<TableAlign>,
+  pub header: TableRow,
+  pub rows: Vec<TableRow>,
 }
 
 /// Represents inline formatting style for text spans
@@ -38,12 +93,14 @@ pub enum InlineNode {
   Text { content: String, style: InlineStyle },
   /// Inline image that breaks text flow
   Image { url: String, alt: String },
+  /// Markdown todo marker rendered inline with text layout
+  TodoMarker { state: TodoState },
 }
 
 /// Represents a node in the markdown document tree
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum MarkdownNode {
-  /// Paragraph with mixed inline content (text only, no images)
+  /// Paragraph with mixed inline content
   Paragraph { inlines: Vec<InlineNode> },
   /// Heading with level (1-6) and mixed inline content
   Heading { level: u8, inlines: Vec<InlineNode> },
@@ -59,6 +116,8 @@ pub enum MarkdownNode {
   HorizontalRule,
   /// Code block with language and code
   CodeBlock { language: String, code: String },
+  /// Markdown table with header/body rows.
+  Table { table: MarkdownTableData },
 }
 
 /// Render a markdown block node to widget
@@ -72,14 +131,13 @@ pub fn render_block(node: MarkdownNode) -> Widget<'static> {
     MarkdownNode::Image { url, alt } => render_image_block(&url, &alt),
     MarkdownNode::HorizontalRule => render_horizontal_rule(),
     MarkdownNode::CodeBlock { language, code } => render_code_block(&language, &code),
+    MarkdownNode::Table { table } => table::render_table(table),
   }
 }
 
-/// Render a paragraph with mixed inline content (text only, no images)
+/// Render a paragraph with mixed inline content
 fn render_paragraph_with_inlines(inlines: Vec<InlineNode>) -> Widget<'static> {
-  let children: Vec<RichTextChild> = build_span_children(&inlines);
-  let stateful = Stateful::new(RichText::default());
-  ComposeChild::compose_child(stateful, children)
+  render_inline_content(inlines)
 }
 
 /// Render a standalone image block
@@ -102,11 +160,11 @@ fn render_image_block(url: &str, alt: &str) -> Widget<'static> {
 /// Render a horizontal rule (---)
 fn render_horizontal_rule() -> Widget<'static> {
   fn_widget! {
+    let palette = Palette::of(BuildCtx::get());
     @Container {
       width: f32::INFINITY,
-      height: 2.0,
-      margin: EdgeInsets::new(16.0, 0.0, 16.0, 16.0),
-      background: Color::from_u32(0xFFE0E0E0),
+      height: 1.0,
+      background: palette.outline_variant(),
     }
   }
   .into_widget()
@@ -114,86 +172,47 @@ fn render_horizontal_rule() -> Widget<'static> {
 
 /// Render a heading with mixed inline content
 fn render_heading(level: u8, inlines: Vec<InlineNode>) -> Widget<'static> {
-  let children = build_span_children(&inlines);
-  // Use heading font sizes based on level
-  let font_size = match level {
-    1 => 32.0,
-    2 => 28.0,
-    3 => 24.0,
-    4 => 20.0,
-    5 => 18.0,
-    6 => 16.0,
-    _ => 16.0,
-  };
+  let widget = render_inline_content(inlines);
 
-  let stateful = Stateful::new(RichText::default());
-  let widget = ComposeChild::compose_child(stateful, children);
-
-  // Wrap with font_size using FatObj
   fn_widget! {
-    let font_size = font_size;
+    let typography = TypographyTheme::of(BuildCtx::get());
+    let palette = Palette::of(BuildCtx::get());
+    let text_style = match level {
+      1 => typography.headline_large.text.clone(),
+      2 => typography.headline_medium.text.clone(),
+      3 => typography.headline_small.text.clone(),
+      4 => typography.title_large.text.clone(),
+      5 => typography.title_medium.text.clone(),
+      _ => typography.title_small.text.clone(),
+    };
     @FatObj {
-      font_size,
+      text_style,
+      foreground: palette.on_surface(),
       @ { widget }
     }
   }
   .into_widget()
 }
 
-/// Build RichText children from inline nodes
-fn build_span_children(inlines: &[InlineNode]) -> Vec<RichTextChild> {
-  let mut children = Vec::new();
-  let mut current_text = String::new();
-  let mut current_style = InlineStyle::default();
-
-  for inline in inlines {
-    match inline {
-      InlineNode::Text { content, style } => {
-        if style == &current_style || current_text.is_empty() {
-          current_text.push_str(content);
-          current_style = style.clone();
-        } else {
-          // Push accumulated text with previous style
-          if !current_text.is_empty() {
-            children.push(create_span_child(&current_text, &current_style));
-            current_text.clear();
-          }
-          current_text = content.clone();
-          current_style = style.clone();
-        }
-      }
-      InlineNode::Image { url: _, alt } => {
-        // Flush current text
-        if !current_text.is_empty() {
-          children.push(create_span_child(&current_text, &current_style));
-          current_text.clear();
-        }
-        // Add image widget - we'll need to handle this specially
-        // For now, add a placeholder text with the alt
-        children.push(RichTextChild::Text(PipeValue::Value(CowArc::from(format!("[{}]", alt)))));
-      }
-    }
+fn render_inline_content(inlines: Vec<InlineNode>) -> Widget<'static> {
+  if inlines.is_empty() {
+    Void::default().into_widget()
+  } else {
+    MixedInline::new(inlines).into_widget()
   }
-
-  if !current_text.is_empty() {
-    children.push(create_span_child(&current_text, &current_style));
-  }
-
-  children
 }
 
 /// Create a RichTextChild from text and style
-fn create_span_child(text: &str, style: &InlineStyle) -> RichTextChild {
+pub(super) fn create_span_child(text: &str, style: &InlineStyle) -> RichTextChild {
   if style.link_url.is_some() {
-    // Link styled text
-    let _url = style.link_url.clone().unwrap();
+    let palette = Palette::of(BuildCtx::get());
     let text_str = text.to_string();
     RichTextChild::Span(Box::new(Span {
       text: PipeValue::Value(CowArc::from(text_str)),
-      foreground: Some(PipeValue::Value(Brush::from(Color::from_u32(0xFF0066CC)))),
+      foreground: Some(PipeValue::Value(Brush::from(palette.primary()))),
       text_decoration: Some(PipeValue::Value(TextDecorationStyle {
         decoration: TextDecoration::UNDERLINE,
-        decoration_color: Some(Color::from_u32(0xFF0066CC)),
+        decoration_color: Some(palette.primary()),
       })),
       ..Default::default()
     }))
@@ -212,14 +231,14 @@ fn create_span_child(text: &str, style: &InlineStyle) -> RichTextChild {
       ..Default::default()
     }))
   } else if style.code {
-    // Code styled text
+    let palette = Palette::of(BuildCtx::get());
     RichTextChild::Span(Box::new(Span {
       text: PipeValue::Value(CowArc::from(text.to_string())),
       font: Some(PipeValue::Value(FontFace {
         families: Box::new([FontFamily::Monospace]),
         ..Default::default()
       })),
-      foreground: Some(PipeValue::Value(Brush::from(Color::from_u32(0xFF8B0000)))),
+      foreground: Some(PipeValue::Value(Brush::from(palette.on_surface()))),
       ..Default::default()
     }))
   } else {
@@ -230,14 +249,13 @@ fn create_span_child(text: &str, style: &InlineStyle) -> RichTextChild {
 
 fn render_unordered_list(items: Vec<Vec<InlineNode>>) -> Widget<'static> {
   fn_widget! {
-    @Column {
+    @Flex {
+      direction: Direction::Vertical,
+      item_gap: LIST_ITEM_SPACING,
+      padding: EdgeInsets::only_left(LIST_BLOCK_INDENT),
       @ {
         items.into_iter().map(|item_inlines| {
-          let text = flatten_inlines(&item_inlines);
-          fn_widget! {
-            @Text { text: format!("• {}", text) }
-          }
-          .into_widget()
+          render_prefixed_inline_item("• ".to_string(), item_inlines)
         }).collect::<Vec<_>>()
       }
     }
@@ -247,14 +265,13 @@ fn render_unordered_list(items: Vec<Vec<InlineNode>>) -> Widget<'static> {
 
 fn render_ordered_list(items: Vec<Vec<InlineNode>>) -> Widget<'static> {
   fn_widget! {
-    @Column {
+    @Flex {
+      direction: Direction::Vertical,
+      item_gap: LIST_ITEM_SPACING,
+      padding: EdgeInsets::only_left(LIST_BLOCK_INDENT),
       @ {
         items.into_iter().enumerate().map(|(i, item_inlines)| {
-          let text = flatten_inlines(&item_inlines);
-          fn_widget! {
-            @Text { text: format!("{}. {}", i + 1, text) }
-          }
-          .into_widget()
+          render_prefixed_inline_item(format!("{}. ", i + 1), item_inlines)
         }).collect::<Vec<_>>()
       }
     }
@@ -264,23 +281,13 @@ fn render_ordered_list(items: Vec<Vec<InlineNode>>) -> Widget<'static> {
 
 fn render_todo_list(items: Vec<TodoItem>) -> Widget<'static> {
   fn_widget! {
-    @Column {
+    @Flex {
+      direction: Direction::Vertical,
+      item_gap: LIST_ITEM_SPACING,
+      padding: EdgeInsets::only_left(LIST_BLOCK_INDENT),
       @ {
         items.into_iter().map(|todo_item| {
-          let text = todo_item.text.clone();
-          let is_checked = matches!(todo_item.state, TodoState::Checked);
-          let is_indeterminate = matches!(todo_item.state, TodoState::Indeterminate);
-
-          fn_widget! {
-            @ListItem {
-              @Checkbox {
-                checked: is_checked,
-                indeterminate: is_indeterminate,
-              }
-              @ListItemHeadline { @ { text } }
-            }
-          }
-          .into_widget()
+          render_inline_content(todo_item_inlines(todo_item))
         }).collect::<Vec<_>>()
       }
     }
@@ -292,13 +299,118 @@ fn render_code_block(language: &str, code: &str) -> Widget<'static> {
   syntax_highlight::create_code_widget(language, code)
 }
 
-/// Flatten inline nodes to a simple string for list items
-fn flatten_inlines(inlines: &[InlineNode]) -> String {
+fn todo_item_inlines(todo_item: TodoItem) -> Vec<InlineNode> {
+  let mut inlines = Vec::with_capacity(todo_item.inlines.len() + 2);
+  inlines.push(InlineNode::TodoMarker { state: todo_item.state });
+  if !todo_item.inlines.is_empty() {
+    inlines.push(InlineNode::Text {
+      content: TODO_MARKER_GAP_TEXT.to_string(),
+      style: InlineStyle::default(),
+    });
+    inlines.extend(todo_item.inlines);
+  }
   inlines
-    .iter()
-    .filter_map(|inline| match inline {
-      InlineNode::Text { content, .. } => Some(content.clone()),
-      InlineNode::Image { alt, .. } => Some(format!("[{}]", alt)),
-    })
-    .collect()
+}
+
+fn render_todo_marker(state: TodoState) -> Widget<'static> {
+  fn_widget! {
+    let palette = Palette::of(BuildCtx::get());
+    let visual = MarkdownTodoMarkerVisual::from_state(&state);
+    let (background, border_color, icon_color) = match visual {
+      MarkdownTodoMarkerVisual::Unchecked => (
+        palette.surface(),
+        palette.outline_variant(),
+        palette.on_surface_variant(),
+      ),
+      MarkdownTodoMarkerVisual::Checked => (
+        palette.primary(),
+        palette.primary(),
+        palette.on_primary(),
+      ),
+      MarkdownTodoMarkerVisual::Indeterminate => (
+        palette.surface_container_highest(),
+        palette.outline(),
+        palette.on_surface_variant(),
+      ),
+    };
+
+    @Container {
+      clamp: BoxClamp::EXPAND_BOTH,
+      background,
+      radius: Radius::all(TODO_MARKER_RADIUS),
+      border: Border::all(BorderSide::new(1., border_color.into())),
+      @ {
+        render_todo_marker_icon(visual, icon_color)
+      }
+    }
+  }
+  .into_widget()
+}
+
+fn render_todo_marker_icon(visual: MarkdownTodoMarkerVisual, color: Color) -> Widget<'static> {
+  match visual {
+    MarkdownTodoMarkerVisual::Unchecked => Void::default().into_widget(),
+    MarkdownTodoMarkerVisual::Checked => fn_widget! {
+      @Icon {
+        x: AnchorX::center(),
+        y: AnchorY::center(),
+        text_line_height: TODO_MARKER_ICON_SIZE,
+        foreground: color,
+        @ { svg_registry::get_or_default("check") }
+      }
+    }
+    .into_widget(),
+    MarkdownTodoMarkerVisual::Indeterminate => fn_widget! {
+      @Container {
+        x: AnchorX::center(),
+        y: AnchorY::center(),
+        size: Size::new(TODO_INDETERMINATE_BAR_WIDTH, TODO_INDETERMINATE_BAR_HEIGHT),
+        radius: Radius::all(TODO_INDETERMINATE_BAR_HEIGHT * 0.5),
+        background: color,
+      }
+    }
+    .into_widget(),
+  }
+}
+
+fn render_prefixed_inline_item(prefix: String, inlines: Vec<InlineNode>) -> Widget<'static> {
+  let mut prefixed = Vec::with_capacity(inlines.len() + 1);
+  prefixed.push(InlineNode::Text { content: prefix, style: InlineStyle::default() });
+  prefixed.extend(inlines);
+  render_inline_content(prefixed)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn markdown_todo_marker_visual_tracks_state() {
+    assert_eq!(
+      MarkdownTodoMarkerVisual::from_state(&TodoState::Unchecked),
+      MarkdownTodoMarkerVisual::Unchecked
+    );
+    assert_eq!(
+      MarkdownTodoMarkerVisual::from_state(&TodoState::Checked),
+      MarkdownTodoMarkerVisual::Checked
+    );
+    assert_eq!(
+      MarkdownTodoMarkerVisual::from_state(&TodoState::Indeterminate),
+      MarkdownTodoMarkerVisual::Indeterminate
+    );
+  }
+
+  #[test]
+  fn todo_item_inlines_prefix_marker_and_preserve_content() {
+    let inlines = todo_item_inlines(TodoItem {
+      state: TodoState::Checked,
+      inlines: vec![InlineNode::Text { content: "task".into(), style: InlineStyle::default() }],
+    });
+
+    assert!(matches!(inlines[0], InlineNode::TodoMarker { state: TodoState::Checked }));
+    assert!(
+      matches!(inlines[1], InlineNode::Text { ref content, .. } if content == TODO_MARKER_GAP_TEXT)
+    );
+    assert!(matches!(inlines[2], InlineNode::Text { ref content, .. } if content == "task"));
+  }
 }

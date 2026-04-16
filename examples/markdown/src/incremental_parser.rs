@@ -35,33 +35,9 @@ impl IncrementalParser {
 
   /// Parse with pre-computed edit operation
   pub fn parse_with_op(&mut self, new_text: &str, edit_op: &EditOp) -> Vec<DocumentNode> {
-    // Determine ranges from EditOp
     let old_range = edit_op.position..edit_op.position + edit_op.old_text.len();
     let new_range = edit_op.position..edit_op.position + edit_op.new_text.len();
-    let length_delta = edit_op.new_text.len() as isize - edit_op.old_text.len() as isize;
-
-    // Find affected node indices
-    let affected = self.find_affected_nodes(&old_range);
-
-    // Determine reparse region
-    let reparse_region =
-      self.compute_reparse_region(&affected, &old_range, &new_range, length_delta);
-
-    // Re-parse affected region using parser
-    let new_nodes = if reparse_region.start < reparse_region.end {
-      parse_range(&new_text[reparse_region.start..reparse_region.end], reparse_region.start)
-    } else {
-      Vec::new()
-    };
-
-    // Merge results
-    let result = self.merge_nodes(&affected, new_nodes, length_delta);
-
-    // Update cache
-    self.cached_nodes = result.clone();
-    self.last_text = new_text.to_string();
-
-    result
+    self.reparse(new_text, &old_range, &new_range)
   }
 
   /// Parse incrementally (fallback that computes edit range internally)
@@ -73,34 +49,26 @@ impl IncrementalParser {
       return self.cached_nodes.clone();
     }
 
-    // Find edit region by comparing texts
     let Some((old_range, new_range)) = find_edit_range(&self.last_text, new_text) else {
       return self.cached_nodes.clone();
     };
 
+    self.reparse(new_text, &old_range, &new_range)
+  }
+
+  fn reparse(
+    &mut self, new_text: &str, old_range: &Range<usize>, new_range: &Range<usize>,
+  ) -> Vec<DocumentNode> {
     let length_delta = new_range.len() as isize - old_range.len() as isize;
-
-    // Find affected nodes
-    let affected = self.find_affected_nodes(&old_range);
-
-    // Compute reparse region
+    let affected = self.find_affected_nodes(old_range);
     let reparse_region =
-      self.compute_reparse_region(&affected, &old_range, &new_range, length_delta);
+      self.compute_reparse_region(new_text, &affected, old_range, new_range, length_delta);
 
-    // Re-parse
-    let new_nodes = if reparse_region.start < reparse_region.end {
-      parse_range(&new_text[reparse_region.start..reparse_region.end], reparse_region.start)
-    } else {
-      Vec::new()
-    };
-
-    // Merge
+    let new_nodes = parse_reparse_region(new_text, &reparse_region);
     let result = self.merge_nodes(&affected, new_nodes, length_delta);
 
-    // Update cache
     self.cached_nodes = result.clone();
     self.last_text = new_text.to_string();
-
     result
   }
 
@@ -112,16 +80,20 @@ impl IncrementalParser {
 
   /// Find nodes overlapping with edit range
   fn find_affected_nodes(&self, old_range: &Range<usize>) -> AffectedNodes {
+    if self.cached_nodes.is_empty() {
+      return AffectedNodes { prefix_end: 0, suffix_start: 0 };
+    }
+
     let replace_start = self
       .cached_nodes
       .iter()
-      .position(|n| n.source_range.end > old_range.start)
+      .position(|n| n.source_range.end >= old_range.start)
       .unwrap_or(self.cached_nodes.len());
 
     let replace_end = self
       .cached_nodes
       .iter()
-      .rposition(|n| n.source_range.start < old_range.end)
+      .rposition(|n| n.source_range.start <= old_range.end)
       .map(|i| i + 1)
       .unwrap_or(0);
 
@@ -137,8 +109,8 @@ impl IncrementalParser {
 
   /// Compute the text region that needs re-parsing
   fn compute_reparse_region(
-    &self, affected: &AffectedNodes, _old_range: &Range<usize>, new_range: &Range<usize>,
-    length_delta: isize,
+    &self, new_text: &str, affected: &AffectedNodes, _old_range: &Range<usize>,
+    new_range: &Range<usize>, length_delta: isize,
   ) -> Range<usize> {
     let text_start = if affected.prefix_end < self.cached_nodes.len() {
       self.cached_nodes[affected.prefix_end]
@@ -158,8 +130,10 @@ impl IncrementalParser {
     };
 
     // Merge with new_range to ensure full coverage
-    let reparse_start = text_start.min(new_range.start);
-    let reparse_end = text_end.max(new_range.end);
+    let reparse_start = text_start
+      .min(new_range.start)
+      .min(new_text.len());
+    let reparse_end = text_end.max(new_range.end).min(new_text.len());
 
     reparse_start..reparse_end
   }
@@ -209,6 +183,10 @@ struct AffectedNodes {
 
 /// Find the edit range between old and new text by comparing from both ends
 fn find_edit_range(old: &str, new: &str) -> Option<(Range<usize>, Range<usize>)> {
+  if old == new {
+    return None;
+  }
+
   let old_bytes = old.as_bytes();
   let new_bytes = new.as_bytes();
 
@@ -220,17 +198,68 @@ fn find_edit_range(old: &str, new: &str) -> Option<(Range<usize>, Range<usize>)>
     .count();
 
   // Find common suffix length (from end)
-  let suffix_len = old_bytes
+  let suffix_len = old_bytes[prefix_len..]
     .iter()
     .rev()
-    .zip(new_bytes.iter().rev())
+    .zip(new_bytes[prefix_len..].iter().rev())
     .take_while(|(a, b)| a == b)
     .count();
 
-  let old_end = old_bytes.len().saturating_sub(suffix_len);
-  let new_end = new_bytes.len().saturating_sub(suffix_len);
-  let old_start = prefix_len.min(old_bytes.len());
-  let new_start = prefix_len.min(new_bytes.len());
+  let old_end = old_bytes.len() - suffix_len;
+  let new_end = new_bytes.len() - suffix_len;
 
-  Some((old_start..old_end.max(old_start), new_start..new_end.max(new_start)))
+  Some((prefix_len..old_end, prefix_len..new_end))
+}
+
+fn parse_reparse_region(text: &str, reparse_region: &Range<usize>) -> Vec<DocumentNode> {
+  if reparse_region.start < reparse_region.end {
+    parse_range(&text[reparse_region.start..reparse_region.end], reparse_region.start)
+  } else {
+    Vec::new()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::{MarkdownNode, undo_redo::compute_edit_op};
+
+  fn summarize(nodes: &[DocumentNode]) -> Vec<(Range<usize>, MarkdownNode)> {
+    nodes
+      .iter()
+      .map(|node| (node.source_range.clone(), node.node.clone()))
+      .collect()
+  }
+
+  fn assert_incremental_matches_full(old: &str, new: &str) {
+    let full = summarize(&parse_full(new));
+
+    let mut parser = IncrementalParser::new(old).1;
+    assert_eq!(summarize(&parser.parse(new)), full);
+
+    let mut parser = IncrementalParser::new(old).1;
+    let op = compute_edit_op(old, new).expect("expected an edit operation");
+    assert_eq!(summarize(&parser.parse_with_op(new, &op)), full);
+  }
+
+  #[test]
+  fn find_edit_range_handles_repeated_bytes_without_overlap() {
+    assert_eq!(find_edit_range("aaa", "aa"), Some((2..3, 2..2)));
+    assert_eq!(find_edit_range("aab", "ab"), Some((1..2, 1..1)));
+    assert_eq!(find_edit_range("abc", "abbc"), Some((2..2, 2..3)));
+  }
+
+  #[test]
+  fn parse_matches_full_for_repeated_character_edits() {
+    assert_incremental_matches_full("abc", "abbc");
+    assert_incremental_matches_full("abbc", "abc");
+  }
+
+  #[test]
+  fn parse_matches_full_for_block_boundary_merges_and_splits() {
+    assert_incremental_matches_full("- a\n\npara\n", "- a\npara\n");
+    assert_incremental_matches_full("- a\npara\n", "- a\n\npara\n");
+    assert_incremental_matches_full("a\n\nb\n", "a\nb\n");
+    assert_incremental_matches_full("a\nb\n", "a\n\nb\n");
+  }
 }

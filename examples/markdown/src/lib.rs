@@ -19,7 +19,7 @@ pub mod undo_redo;
 
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
-pub use components::{MarkdownNode, render_block};
+pub use components::{MarkdownNode, MixedInline, render_block};
 pub use core_doc::MarkdownCoreDoc;
 use ribir::prelude::*;
 
@@ -211,12 +211,14 @@ impl MarkdownEditor {
 
         @Expanded {
           @ReuseScope {
-            @ScrollableWidget {
-              scrollable: Scrollable::Y,
-              @Column {
-                text_overflow: TextOverflow::AutoWrap,
-                @ {
-                  pipe!({
+              @ScrollableWidget {
+                scrollable: Scrollable::Y,
+                @Flex {
+                  direction: Direction::Vertical,
+                  item_gap: 12.0,
+                  text_overflow: TextOverflow::AutoWrap,
+                  @ {
+                    pipe!({
                     $read(doc).document_nodes().clone()
                   }).map(|nodes: Vec<DocumentNode>| {
                     nodes.iter().map(|doc_node| {

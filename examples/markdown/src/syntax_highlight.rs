@@ -138,9 +138,10 @@ pub fn create_code_widget(language: &str, code: &str) -> Widget<'static> {
   fn_widget! {
     @CodeBlock {
       text: highlighted_text.clone(),
-      background: Color::from_rgb(0x2b, 0x30, 0x3b),
+      background: Color::from_rgb(0x24, 0x29, 0x33),
+      radius: Radius::all(10.0),
       padding: EdgeInsets::all(12.0),
-      margin: EdgeInsets::symmetrical(8.0, 0.0),
+      margin: EdgeInsets::symmetrical(4.0, 0.0),
     }
   }
   .into_widget()
