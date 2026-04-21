@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 pulldown-cmark = "0.10"
 ribir = { path = "../../ribir", features = ["material", "widgets"] }
-syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+syntect = { version = "5.3"}
 webbrowser = "1.0.5"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }

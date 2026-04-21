@@ -93,15 +93,13 @@ pub struct MarkdownCoreDoc {
   undo_redo: UndoRedoStack,
   /// Incremental parser for efficient re-parsing
   incremental_parser: IncrementalParser,
-  /// Version number that increments with each committed edit
-  version: u64,
   /// Pending commands queue
   command_queue: CommandQueue,
   /// Pending text (current text being edited, not yet committed)
   pending_text: Rc<RefCell<String>>,
-  /// Editing version - increments on every push_set_text, used for dirty
-  /// detection
-  editing_version: u64,
+  /// Version that changes on every edit operation (push_set_text, undo, redo)
+  /// Used for dirty detection: is_dirty = version != saved_version
+  version: u64,
 }
 
 impl MarkdownCoreDoc {
@@ -115,10 +113,9 @@ impl MarkdownCoreDoc {
       document,
       undo_redo: UndoRedoStack::new(),
       incremental_parser,
-      version: 0,
       command_queue: CommandQueue::new(),
       pending_text: Rc::new(RefCell::new(source)),
-      editing_version: 0,
+      version: 0,
     }
   }
 
@@ -134,12 +131,8 @@ impl MarkdownCoreDoc {
   /// Get parsed document
   pub fn document(&self) -> &MarkdownDocument { &self.document }
 
-  /// Get current version (committed)
+  /// Get current version
   pub fn version(&self) -> u64 { self.version }
-
-  /// Get editing version (increments on every push_set_text)
-  /// Used for immediate dirty detection before debounce consume
-  pub fn editing_version(&self) -> u64 { self.editing_version }
 
   /// Check if there are pending SetText commands
   pub fn has_pending(&self) -> bool { self.command_queue.last_is_settext() }
@@ -150,7 +143,9 @@ impl MarkdownCoreDoc {
       .command_queue
       .push(PendingCommand::SetText { text: text.clone() });
     *self.pending_text.borrow_mut() = text;
-    self.editing_version += 1;
+
+    println!("push_set_text: version {} → {}", self.version, self.version + 1);
+    self.version += 1;
   }
 
   /// Push Undo command
@@ -181,9 +176,8 @@ impl MarkdownCoreDoc {
     // Push to undo stack
     self.undo_redo.push(op.clone());
 
-    // Update source and version
+    // Update source (version already incremented in push_set_text)
     self.source = text.clone();
-    self.version += 1;
 
     // Incremental parse
     let source = self.source.clone();
@@ -207,6 +201,7 @@ impl MarkdownCoreDoc {
 
     self.source = text.clone();
     self.version = self.version.saturating_sub(1);
+    println!("undo: version {} → {}", self.version + 1, self.version);
 
     self.incremental_parse_with_op(&text, &inverse_op);
 
@@ -227,6 +222,7 @@ impl MarkdownCoreDoc {
 
     self.source = text.clone();
     self.version += 1;
+    println!("redo: version {} → {}", self.version - 1, self.version);
 
     self.incremental_parse_with_op(&text, &op);
 
@@ -386,21 +382,27 @@ mod tests {
     let mut doc = MarkdownCoreDoc::new("initial");
     assert_eq!(doc.version(), 0);
 
+    // push_set_text increments version immediately
     doc.push_set_text("modified".to_string());
-    // Version unchanged until consumed
-    assert_eq!(doc.version(), 0);
+    assert_eq!(doc.version(), 1);
 
+    // consume_set_text does not change version
     doc.consume_set_text();
     assert_eq!(doc.version(), 1);
 
     // Another edit
     doc.push_set_text("edited again".to_string());
+    assert_eq!(doc.version(), 2);
     doc.consume_set_text();
     assert_eq!(doc.version(), 2);
 
     // Undo decrements version
     doc.undo();
     assert_eq!(doc.version(), 1);
+
+    // Redo increments version
+    doc.redo();
+    assert_eq!(doc.version(), 2);
   }
 
   #[test]

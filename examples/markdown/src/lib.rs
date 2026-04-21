@@ -94,27 +94,18 @@ impl MarkdownDocument {
 /// Markdown editor widget - only handles editing, file ops managed by App layer
 pub struct MarkdownEditor {
   doc: Stateful<MarkdownCoreDoc>,
-  /// Track version at last consume for dirty detection
-  last_consume_version: Stateful<u64>,
 }
 
 impl MarkdownEditor {
   /// Create editor with doc from app layer
-  pub fn new(doc: Stateful<MarkdownCoreDoc>) -> Self {
-    let last_consume_version = Stateful::new(doc.read().version());
-    Self { doc, last_consume_version }
-  }
+  pub fn new(doc: Stateful<MarkdownCoreDoc>) -> Self { Self { doc } }
 
   /// Get doc for app layer to access
   pub fn doc(&self) -> Stateful<MarkdownCoreDoc> { self.doc.clone_writer() }
 
-  /// Get last consume version for dirty tracking
-  pub fn last_consume_version(&self) -> Stateful<u64> { self.last_consume_version.clone_writer() }
-
   /// Render the editor widget
   pub fn into_widget(self) -> Widget<'static> {
     let doc = self.doc;
-    let last_consume_version = self.last_consume_version;
     let initial_source = doc.read().source().to_string();
 
     fn_widget! {
@@ -125,27 +116,24 @@ impl MarkdownEditor {
       let is_undo_redo = Rc::new(RefCell::new(false));
 
       // Watch TextArea text changes → push to doc command queue
-      let doc_for_input = doc.clone_writer();
       let is_undo_redo_for_input = is_undo_redo.clone();
       let input_watch = watch!($read(text_area).text().clone())
         .distinct_until_changed()
+        .skip(1) // Skip initial value
         .subscribe(move |text| {
           if !*is_undo_redo_for_input.borrow() {
-            doc_for_input.write().push_set_text(text.to_string());
+            $write(doc).push_set_text(text.to_string());
           }
         });
 
       // Debounced: consume SetText after 200ms
       let doc_for_debounce = doc.clone_writer();
-      let last_version_for_debounce = last_consume_version.clone_writer();
 
       let debounce_watch = watch!($read(text_area).text().clone())
         .debounce(std::time::Duration::from_millis(200))
         .subscribe(move |_| {
-          // Consume pending SetText, update version tracking
-          if doc_for_debounce.write().consume_set_text().is_some() {
-            *last_version_for_debounce.write() = doc_for_debounce.read().version();
-          }
+          // Consume pending SetText
+          doc_for_debounce.write().consume_set_text();
         });
 
       @Row {
@@ -162,7 +150,6 @@ impl MarkdownEditor {
               on_key_down: {
                 let doc_for_key = doc.clone_writer();
                 let text_area_for_key = text_area.clone_writer();
-                let last_version_for_key = last_consume_version.clone_writer();
                 let is_undo_redo_for_key = is_undo_redo.clone();
                 move |e| {
                   if !e.with_command_key() {
@@ -178,7 +165,6 @@ impl MarkdownEditor {
                         let text = doc_for_key.read().source().to_string();
                         text_area_for_key.write().set_text(&text);
                         text_area_for_key.write().select(edit_op.position, edit_op.position);
-                        *last_version_for_key.write() = doc_for_key.read().version();
                       }
                       *is_undo_redo_for_key.borrow_mut() = false;
                     }
@@ -191,7 +177,6 @@ impl MarkdownEditor {
                         let caret = edit_op.position + edit_op.new_text.len();
                         text_area_for_key.write().set_text(&text);
                         text_area_for_key.write().select(caret, caret);
-                        *last_version_for_key.write() = doc_for_key.read().version();
                       }
                       *is_undo_redo_for_key.borrow_mut() = false;
                     }
@@ -257,12 +242,11 @@ impl MarkdownApp {
 
   pub fn widget(this: impl StateWriter<Value = Self>) -> Widget<'static> {
     // App-level state
-    let saved_version = Stateful::new(0u64); // Version at last save
     let file_path = Stateful::new(Option::<PathBuf>::None);
     let editor_seed = Stateful::new(0u64); // To recreate editor on file open/new
+     let saved_version = Stateful::new(1u64); // Version at last save
 
     fn_widget! {
-      let wnd = BuildCtx::get().window();
 
       // Helper: update window title based on file path and dirty state
       fn update_title(wnd: &Window, path: &Option<PathBuf>, is_dirty: bool) {
@@ -275,8 +259,7 @@ impl MarkdownApp {
             else { format!("{} - Markdown Editor", name) }
           }
           None => {
-            if is_dirty { "Untitled* - Markdown Editor".to_string() }
-            else { "Untitled - Markdown Editor".to_string() }
+           "Untitled* - Markdown Editor".to_string()
           }
         };
         wnd.set_title(&title);
@@ -284,10 +267,6 @@ impl MarkdownApp {
 
       @Container {
         on_key_down: {
-          let saved_version_for_key = saved_version.clone_writer();
-          let file_path_for_key = file_path.clone_writer();
-          let editor_seed_for_key = editor_seed.clone_writer();
-          let wnd_for_key = wnd.clone();
           move |e: &mut KeyboardEvent| {
             if !e.with_command_key() {
               return;
@@ -302,9 +281,9 @@ impl MarkdownApp {
               {
                 // Save to new path
                 let version = $read(this).doc.write().save(&path.to_string_lossy()).unwrap_or(0);
-                *saved_version_for_key.write() = version;
-                *file_path_for_key.write() = Some(path.clone());
-                update_title(&wnd_for_key, &Some(path), false);
+                *$write(saved_version) = version;
+                *$write(file_path) = Some(path.clone());
+                update_title(&e.window(), &Some(path), false);
               }
               return;
             }
@@ -319,25 +298,23 @@ impl MarkdownApp {
                 {
                   if let Ok(content) = std::fs::read_to_string(&path) {
                     // Reset doc with new content
-                    *editor_seed_for_key.write() += 1;
+                    *$write(editor_seed) += 1;
                     $write(this).doc = Stateful::new(MarkdownCoreDoc::new(content));
-                    *saved_version_for_key.write() = 0;
-                    *file_path_for_key.write() = Some(path.clone());
-                    update_title(&wnd_for_key, &Some(path), false);
+                    *$write(file_path) = Some(path.clone());
+                    update_title(&e.window(), &Some(path), false);
                   }
                 }
               }
               PhysicalKey::Code(KeyCode::KeyN) => {
                 // New file
-                *editor_seed_for_key.write() += 1;
+                *$write(editor_seed) += 1;
                 $write(this).doc = Stateful::new(MarkdownCoreDoc::new(""));
-                *saved_version_for_key.write() = 0;
-                *file_path_for_key.write() = None;
-                update_title(&wnd_for_key, &None, false);
+                *$write(file_path) = None;
+                update_title(&e.window(), &None, false);
               }
               PhysicalKey::Code(KeyCode::KeyS) => {
                 // Cmd+S: Save
-                let path_opt = file_path_for_key.read().clone();
+                let path_opt = $read(file_path).clone();
                 let path_to_save = if let Some(p) = path_opt {
                   Some(p)
                 } else {
@@ -351,11 +328,11 @@ impl MarkdownApp {
 
                 if let Some(path) = path_to_save {
                   let version = $read(this).doc.write().save(&path.to_string_lossy()).unwrap_or(0);
-                  *saved_version_for_key.write() = version;
-                  if file_path_for_key.read().is_none() {
-                    *file_path_for_key.write() = Some(path.clone());
+                  *$write(saved_version) = version;
+                  if $read(file_path).is_none() {
+                    *$write(file_path) = Some(path.clone());
                   }
-                  update_title(&wnd_for_key, &Some(path), false);
+                  update_title(&e.window(), &Some(path), false);
                 }
               }
               _ => {}
@@ -363,27 +340,21 @@ impl MarkdownApp {
           }
         },
         @ {
-          // Watch version changes to update dirty state in title
-          let saved_version_for_watch = saved_version.clone_reader();
-          let file_path_for_watch = file_path.clone_reader();
-          let wnd_for_watch = wnd.clone();
-
-          // Watch editing_version for immediate dirty detection (before debounce)
-          watch!($read(this).doc.read().editing_version())
-            .subscribe(move |editing_version| {
-              // Compare committed version + pending state for dirty detection
-              let committed_version = $read(this).doc.read().version();
-              let is_dirty = committed_version != *saved_version_for_watch.read()
-                || editing_version != committed_version;
-              let path = file_path_for_watch.read().clone();
-              update_title(&wnd_for_watch, &path, is_dirty);
-            });
-
           // Create editor, recreate when seed changes (new file/open)
           pipe!($read(editor_seed);).map(move |_| {
-            let doc_for_editor = $read(this).doc.clone_writer();
             fn_widget! {
-              MarkdownEditor::new(doc_for_editor).into_widget()
+              let doc = $read(this).doc.clone_writer();
+              let wnd = BuildCtx::get().window();
+              *$write(saved_version) = doc.read().version();
+              let unsub = watch!(*$read(saved_version) != $read(doc).version())
+                .distinct_until_changed()
+                .subscribe(move |is_dirty| {
+                  update_title(&wnd, &*$read(file_path), is_dirty);
+                });
+              @FatObj {
+                on_disposed: move |_| unsub.unsubscribe(),
+                @ { MarkdownEditor::new(doc).into_widget() }
+              }
             }
           })
         }
