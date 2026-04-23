@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::ops::{Deref, DerefMut, Range};
 
 use ribir_core::prelude::*;
 
@@ -21,6 +21,22 @@ class_names!(
   ///Class name for the text area widget
   TEXTAREA,
 );
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextChanged {
+  pub from: CowArc<str>,
+  pub to: CowArc<str>,
+}
+
+pub type TextChangedEvent = CustomEvent<TextChanged>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextSelectChanged {
+  pub from: Range<usize>,
+  pub to: Range<usize>,
+}
+
+pub type TextSelectChangedEvent = CustomEvent<TextSelectChanged>;
 
 /// The `Input` struct is a widget that represents a text input field
 /// that displays a single line of text. if you need multi line text, use
@@ -47,9 +63,7 @@ class_names!(
 /// };
 /// App::run(w);
 /// ```
-#[declare]
 pub struct Input {
-  #[declare(skip)]
   basic: BasicEditor<InputText>,
 }
 
@@ -77,14 +91,58 @@ impl Input {
   pub fn selection(&self) -> Range<usize> { self.basic.cluster_rg() }
 }
 
+pub struct InputDeclarer {
+  text: Option<CowArc<str>>,
+  obj: FatObj<()>,
+}
+
+impl Declare for Input {
+  type Builder = InputDeclarer;
+
+  fn declarer() -> Self::Builder { InputDeclarer { text: None, obj: FatObj::new(()) } }
+}
+
+impl ObjDeclarer for InputDeclarer {
+  type Target = FatObj<Stateful<Input>>;
+
+  fn finish(mut self) -> Self::Target {
+    let input = Input { basic: BasicEditor::default() };
+    let input = if let Some(text) = self.text.take() {
+      let i = Stateful::new(input);
+      i.write().set_text(text.as_ref());
+      i
+    } else {
+      Stateful::new(input)
+    };
+
+    self.obj.map(|_| input)
+  }
+}
+
+impl InputDeclarer {
+  /// Initialize the input text once during widget composition.
+  pub fn with_text(&mut self, text: impl Into<CowArc<str>>) -> &mut Self {
+    assert!(self.text.is_none(), "Input: `text` is already set");
+    self.text = Some(text.into());
+    self
+  }
+}
+
+impl Deref for InputDeclarer {
+  type Target = FatObj<()>;
+
+  fn deref(&self) -> &Self::Target { &self.obj }
+}
+
+impl DerefMut for InputDeclarer {
+  fn deref_mut(&mut self) -> &mut Self::Target { &mut self.obj }
+}
+
 /// The `TextArea` struct is a widget that represents a text input field
 /// that displays multiple lines of text. for single line text, use `[Input]`
-#[declare]
 pub struct TextArea {
   /// if true, the text will be auto wrap when the text is too long
-  #[declare(default = true)]
   auto_wrap: bool,
-  #[declare(skip)]
   basic: BasicEditor<CowArc<str>>,
 }
 
@@ -106,6 +164,56 @@ impl TextArea {
 
   /// return the selection range of the text
   pub fn selection(&self) -> Range<usize> { self.basic.cluster_rg() }
+}
+
+pub struct TextAreaDeclarer {
+  text: Option<CowArc<str>>,
+  auto_wrap: bool,
+  obj: FatObj<()>,
+}
+
+impl Declare for TextArea {
+  type Builder = TextAreaDeclarer;
+
+  fn declarer() -> Self::Builder {
+    TextAreaDeclarer { text: None, auto_wrap: true, obj: FatObj::new(()) }
+  }
+}
+
+impl ObjDeclarer for TextAreaDeclarer {
+  type Target = FatObj<Stateful<TextArea>>;
+
+  fn finish(mut self) -> Self::Target {
+    let text_area = TextArea { auto_wrap: self.auto_wrap, basic: BasicEditor::default() };
+    let text_area = if let Some(text) = self.text.take() {
+      let t = Stateful::new(text_area);
+      t.write().set_text(text.as_ref());
+      t
+    } else {
+      Stateful::new(text_area)
+    };
+
+    self.obj.map(|_| text_area)
+  }
+}
+
+impl TextAreaDeclarer {
+  /// Initialize the text area content once during widget composition.
+  pub fn with_text(&mut self, text: impl Into<CowArc<str>>) -> &mut Self {
+    assert!(self.text.is_none(), "TextArea: `text` is already set");
+    self.text = Some(text.into());
+    self
+  }
+}
+
+impl Deref for TextAreaDeclarer {
+  type Target = FatObj<()>;
+
+  fn deref(&self) -> &Self::Target { &self.obj }
+}
+
+impl DerefMut for TextAreaDeclarer {
+  fn deref_mut(&mut self) -> &mut Self::Target { &mut self.obj }
 }
 
 #[derive(Clone, Eq, PartialEq, Default)]
@@ -202,7 +310,11 @@ impl Compose for TextArea {
           cols: Some(20.),
           class: TEXTAREA,
           @Scrollbar {
-            text_overflow: TextOverflow::AutoWrap,
+            text_overflow: pipe!(if $read(this).auto_wrap {
+              TextOverflow::AutoWrap
+            } else {
+              TextOverflow::Overflow
+            }),
             @ { basic }
           }
         }
@@ -236,6 +348,31 @@ mod tests {
     wnd.process_receive_chars("hello\nworld".into());
     wnd.draw_frame();
     assert_eq!(*value.read(), "helloworld");
+  }
+
+  #[test]
+  fn declarer_text_initializes_input_and_text_area() {
+    reset_test_env!();
+    let (input_text, w_input_text) = split_value(String::default());
+    let (text_area_text, w_text_area_text) = split_value(String::default());
+    let w = fn_widget! {
+      let input = @Input { text: "hello\nworld" };
+      let text_area = @TextArea { text: "hello\nworld" };
+      watch!($read(input).text().clone())
+        .subscribe(move |text| *$write(w_input_text) = text.to_string());
+      watch!($read(text_area).text().clone())
+        .subscribe(move |text| *$write(w_text_area_text) = text.to_string());
+      @Column {
+        @ { input }
+        @ { text_area }
+      }
+    };
+
+    let wnd = TestWindow::new_with_size(w, Size::new(200., 200.));
+    wnd.draw_frame();
+
+    assert_eq!(*input_text.read(), "helloworld");
+    assert_eq!(*text_area_text.read(), "hello\nworld");
   }
 
   #[test]
@@ -294,5 +431,33 @@ mod tests {
     }
 
     assert_eq!(input_state.read().selection(), 0..5);
+  }
+
+  #[test]
+  fn input_emits_text_and_selection_changed_events() {
+    reset_test_env!();
+    let text_changes = Stateful::new(Vec::<TextChanged>::new());
+    let selection_changes = Stateful::new(Vec::<TextSelectChanged>::new());
+    let w = fn_widget! {
+      @Input {
+        auto_focus: true,
+        on_raw_custom: move |e: &mut RawCustomEvent| {
+          if let Some(e) = e.downcast_ref::<TextChanged>() {
+            $write(text_changes).push(e.data().clone());
+          } else if let Some(e) = e.downcast_ref::<TextSelectChanged>() {
+            $write(selection_changes).push(e.data().clone());
+          }
+        },
+      }
+    };
+
+    let wnd = TestWindow::new_with_size(w, Size::new(200., 200.));
+    wnd.draw_frame();
+
+    wnd.process_receive_chars("ab".into());
+    wnd.draw_frame();
+
+    assert_eq!(&*text_changes.read(), &[TextChanged { from: "".into(), to: "ab".into() }]);
+    assert_eq!(&*selection_changes.read(), &[TextSelectChanged { from: 0..0, to: 2..2 }]);
   }
 }

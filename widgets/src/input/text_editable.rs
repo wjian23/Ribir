@@ -44,70 +44,93 @@ impl<T: Default + VisualText + EditText + Clone + 'static> Compose for BasicEdit
         .map(move |v| v.then(|| fn_widget!{ Self::caret_widget($writer(this)) }));
 
       let mut caret = FatObj::new(caret);
-      @Stack {
-        fit: StackFit::Passthrough,
-        @Providers {
-          providers: [Provider::writer(text_state.clone_writer(), Some(DirtyPhase::Layout))],
-          @PointerSelectRegion {
-            on_custom: move |e: &mut PointerSelectEvent| {
-              if let PointerSelectData::Move { from, to } = e.data() {
-                let new_sel = $read(this).selection_from_points(*from, *to);
-                if let Some(new_sel) = new_sel  {
+        @Stack {
+          fit: StackFit::Passthrough,
+          @Providers {
+            providers: [Provider::writer(text_state.clone_writer(), Some(DirtyPhase::Layout))],
+            @PointerSelectRegion {
+              on_custom: move |e: &mut PointerSelectEvent| {
+                let before = $read(this).snapshot();
+                if let PointerSelectData::Move { from, to } = e.data() {
+                  let new_sel = $read(this).selection_from_points(*from, *to);
+                  if let Some(new_sel) = new_sel  {
+                    $write(selection_state).range = new_sel;
+                  }
+                }
+                $read(this).bubble_change_events(before, e);
+              },
+              on_pointer_down: move |e| {
+                let before = $read(this).snapshot();
+                let pos = $read(this).position_from_point(e.position());
+                if let Some(pos) = pos {
+                  let mut selection = $write(selection_state);
+                  if e.with_shift_key() {
+                    selection.focus = pos;
+                } else {
+                    selection.range = TextSelectionRange::splat(pos);
+                  }
+                }
+                $read(this).bubble_change_events(before, e);
+              },
+              on_tap: move |e| {
+                let before = $read(this).snapshot();
+                let new_sel = $read(this).selection_from_points(e.position(), e.position());
+                if let Some(new_sel) = new_sel {
                   $write(selection_state).range = new_sel;
                 }
-              }
-            },
-            on_pointer_down: move |e| {
-              let pos = $read(this).position_from_point(e.position());
-              if let Some(pos) = pos {
-                let mut selection = $write(selection_state);
-                if e.with_shift_key() {
-                  selection.focus = pos;
+                $read(this).bubble_change_events(before, e);
+              },
+              on_double_tap: move |e| {
+                let before = $read(this).snapshot();
+                let new_sel = {
+                  let this = $read(this);
+                  this
+                    .position_from_point(e.position())
+                  .and_then(|pos| this.host.select_unit(&pos, MoveMode::Word))
+                };
+                if let Some(new_sel) = new_sel {
+                  $write(selection_state).range = new_sel;
+                }
+                $read(this).bubble_change_events(before, e);
+              },
+              @SelectionOverlay {
+                class: TEXT_SELECTION,
+                rects: pipe!(if hosted_in_area {
+                  Vec::new()
                 } else {
-                  selection.range = TextSelectionRange::splat(pos);
+                  $read(this).selection_rects()
+                }),
+                @(text) {
+                  margin: pipe!(EdgeInsets::only_right(*$read(caret.layout_width()))),
+                  on_focus_in: move |e| { e.window().set_ime_allowed(true); },
+                  on_focus_out: move |e| { e.window().set_ime_allowed(false); },
+                  on_chars: move |e| {
+                    let before = $read(this).snapshot();
+                    let mut this = $write(this);
+                    if this.chars_handle(e) {
+                      this.bubble_change_events(before, e);
+                    } else {
+                      this.forget_modifies();
+                    }
+                  },
+                  on_key_down: move |e| {
+                    let before = $read(this).snapshot();
+                    let mut this = $write(this);
+                    if this.selection_keys_handle(e) || this.keys_handle(e) {
+                      this.bubble_change_events(before, e);
+                    } else {
+                      this.forget_modifies();
+                    }
+                  },
+                  on_ime_pre_edit: move |e| {
+                    let before = $read(this).snapshot();
+                    let mut this = $write(this);
+                    this.process_pre_edit(e);
+                    this.bubble_change_events(before, e);
+                  },
                 }
               }
-            },
-            on_tap: move |e| {
-              let new_sel = $read(this).selection_from_points(e.position(), e.position());
-              if let Some(new_sel) = new_sel {
-                $write(selection_state).range = new_sel;
-              }
-            },
-            on_double_tap: move |e| {
-              let new_sel = {
-                let this = $read(this);
-                this
-                  .position_from_point(e.position())
-                  .and_then(|pos| this.host.select_unit(&pos, MoveMode::Word))
-              };
-              if let Some(new_sel) = new_sel {
-                $write(selection_state).range = new_sel;
-              }
-            },
-            @SelectionOverlay {
-              class: TEXT_SELECTION,
-              rects: pipe!(if hosted_in_area { Vec::new() } else { $read(this).selection_rects() }),
-              @(text) {
-                margin: pipe!(EdgeInsets::only_right(*$read(caret.layout_width()))),
-                on_focus_in: move |e| { e.window().set_ime_allowed(true); },
-                on_focus_out: move |e| { e.window().set_ime_allowed(false); },
-                on_chars: move |e| {
-                  let mut this = $write(this);
-                  if !this.chars_handle(e) {
-                    this.forget_modifies();
-                  }
-                },
-                on_key_down: move |e| {
-                  let mut this = $write(this);
-                  if !this.selection_keys_handle(e) && !this.keys_handle(e) {
-                    this.forget_modifies();
-                  }
-                },
-                on_ime_pre_edit: move |e| { $write(this).process_pre_edit(e); },
-              }
             }
-          }
         }
         @InParentLayout { @ { caret } }
       }
@@ -465,6 +488,34 @@ impl<T: EditText + 'static> BasicEditor<T> {
     del_rg
   }
 
+  fn snapshot(&self) -> EditorSnapshot {
+    EditorSnapshot {
+      text: self.substr(0..self.len()).to_string().into(),
+      selection: self.cluster_rg(),
+    }
+  }
+
+  fn bubble_change_events(
+    &self, before: EditorSnapshot, e: &impl std::ops::Deref<Target = CommonEvent>,
+  ) {
+    let after = self.snapshot();
+    let EditorSnapshot { text: from_text, selection: from_selection } = before;
+
+    if from_text != after.text {
+      e.window().bubble_custom_event(
+        e.current_target(),
+        TextChanged { from: from_text, to: after.text.clone() },
+      );
+    }
+
+    if from_selection != after.selection {
+      e.window().bubble_custom_event(
+        e.current_target(),
+        TextSelectChanged { from: from_selection, to: after.selection },
+      );
+    }
+  }
+
   fn is_in_pre_edit(&self) -> bool { self.pre_edit.is_some() }
 
   fn process_pre_edit(&mut self, e: &ImePreEditEvent) {
@@ -511,6 +562,11 @@ impl<T: EditText + 'static> BasicEditor<T> {
 struct PreEditState {
   position: usize,
   value: Option<String>,
+}
+
+struct EditorSnapshot {
+  text: CowArc<str>,
+  selection: Range<usize>,
 }
 
 impl<T> std::ops::Deref for BasicEditor<T> {

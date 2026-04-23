@@ -871,10 +871,10 @@ mod tests {
       let queried = Stateful::new(false);
       let title = @TextSelectable::<CowArc<str>> { text: "Title" };
       let body = @TextSelectable::<CowArc<str>> { text: "Body" };
-      let mut children = vec![title.clone_writer().into_widget(), body.clone_writer().into_widget()];
+      let mut children = vec![title.into_widget(), body.into_widget()];
       if *$read(show_prefix) {
         let prefix = @TextSelectable::<CowArc<str>> { text: "Prefix" };
-        children.insert(0, prefix.clone_writer().into_widget());
+        children.insert(0, prefix.into_widget());
       }
       let area = SelectableArea::compose_child(area.clone_writer(), children);
 
