@@ -1,6 +1,6 @@
 use ribir_core::prelude::*;
 
-use crate::layout::*;
+use crate::{layout::*, prelude::*};
 
 /// This widget wraps its child in a `ScrollableWidget` and adds two scrollbar
 /// for interactivity and visual scroll position indication.
@@ -91,34 +91,76 @@ impl<'c> ComposeChild<'c> for Scrollbar {
       @ {
         let h_scrollbar = distinct_pipe!($read(scroll).is_x_scrollable())
           .map(move |need_bar| need_bar.then(|| fn_widget!{
+            let h_drag_anchor = Stateful::new(None::<f32>);
             let mut h_track = @Stack {
               class: H_SCROLL_TRACK,
               clamp: BoxClamp::EXPAND_X,
               on_wheel: move |e| $write(scroll).scroll(-e.delta_x, -e.delta_y),
             };
+            let h_track_width = h_track.layout_width();
             let mut h_thumb =  @Container {
               class: H_SCROLL_THUMB,
               hint_width: distinct_pipe!{
-                let track_width = *$read(h_track.layout_width());
+                let track_width = *$read(h_track_width);
                 h_thumb_rate(&$read(scroll)) * track_width
               },
               hint_height: 4.,
             };
+            let h_thumb_width = h_thumb.layout_width();
 
-            @(h_track) {
-              on_tap: move |e| if e.is_primary {
-                let rate = e.position().x / *$read(h_track.layout_width());
-                let mut scroll = $write(scroll);
-                let x = rate * scroll.max_scrollable().x;
-                let scroll_pos = Point::new(x, scroll.get_scroll_pos().y);
-                scroll.jump_to(scroll_pos);
+            @PointerSelectRegion {
+              on_custom: move |e: &mut PointerSelectEvent| {
+                let track_width = *$read(h_track_width);
+                let thumb_width = *$read(h_thumb_width);
+
+                match e.data() {
+                  PointerSelectData::Start(point) => {
+                    *$write(h_drag_anchor) = thumb_drag_anchor(
+                      track_width,
+                      thumb_width,
+                      point.x,
+                      $read(scroll).get_x_scroll_rate(),
+                    );
+                  }
+                  PointerSelectData::Move { to, .. } => {
+                    if let Some(anchor) = *$read(h_drag_anchor) {
+                      drag_horizontal_thumb(
+                        &mut $write(scroll),
+                        track_width,
+                        thumb_width,
+                        to.x,
+                        anchor,
+                      );
+                    }
+                  }
+                  PointerSelectData::End { to, .. } => {
+                    if let Some(anchor) = $write(h_drag_anchor).take() {
+                      drag_horizontal_thumb(
+                        &mut $write(scroll),
+                        track_width,
+                        thumb_width,
+                        to.x,
+                        anchor,
+                      );
+                    }
+                  }
+                }
               },
-              @(h_thumb) {
-                x: distinct_pipe!{
-                  let rate = $read(scroll).get_x_scroll_rate();
-                  let track_width = *$read(h_track.layout_width());
-                  let thumb_width = *$read(h_thumb.layout_width());
-                  rate * (track_width - thumb_width)
+              @(h_track) {
+                on_tap: move |e| if e.is_primary {
+                  let rate = e.position().x / *$read(h_track_width);
+                  let mut scroll = $write(scroll);
+                  let x = rate * scroll.max_scrollable().x;
+                  let scroll_pos = Point::new(x, scroll.get_scroll_pos().y);
+                  scroll.jump_to(scroll_pos);
+                },
+                @(h_thumb) {
+                  x: distinct_pipe!{
+                    let rate = $read(scroll).get_x_scroll_rate();
+                    let track_width = *$read(h_track_width);
+                    let thumb_width = *$read(h_thumb_width);
+                    thumb_offset(rate, track_width, thumb_width)
+                  }
                 }
               }
             }
@@ -126,35 +168,77 @@ impl<'c> ComposeChild<'c> for Scrollbar {
 
         let v_scrollbar = distinct_pipe!($read(scroll).is_y_scrollable())
           .map(move |need_bar| need_bar.then(|| fn_widget!{
+            let v_drag_anchor = Stateful::new(None::<f32>);
             let mut v_track = @Stack {
               class: V_SCROLL_TRACK,
               clamp: BoxClamp::EXPAND_Y,
               on_wheel: move |e| $write(scroll).scroll(-e.delta_x, -e.delta_y),
             };
+            let v_track_height = v_track.layout_height();
 
             let mut v_thumb = @Container {
               class: V_SCROLL_THUMB,
               hint_width: 4.,
               hint_height: distinct_pipe!{
-                let track_height = *$read(v_track.layout_height());
+                let track_height = *$read(v_track_height);
                 v_thumb_rate(&$read(scroll)) * track_height
               },
             };
+            let v_thumb_height = v_thumb.layout_height();
 
-            @(v_track) {
-              on_tap: move |e| if e.is_primary {
-                let rate = e.position().y / *$read(v_track.layout_height());
-                let mut scroll = $write(scroll);
-                let y = rate * scroll.max_scrollable().y;
-                let scroll_pos = Point::new(scroll.get_scroll_pos().x, y);
-                scroll.jump_to(scroll_pos);
+            @PointerSelectRegion {
+              on_custom: move |e: &mut PointerSelectEvent| {
+                let track_height = *$read(v_track_height);
+                let thumb_height = *$read(v_thumb_height);
+
+                match e.data() {
+                  PointerSelectData::Start(point) => {
+                    *$write(v_drag_anchor) = thumb_drag_anchor(
+                      track_height,
+                      thumb_height,
+                      point.y,
+                      $read(scroll).get_y_scroll_rate(),
+                    );
+                  }
+                  PointerSelectData::Move { to, .. } => {
+                    if let Some(anchor) = *$read(v_drag_anchor) {
+                      drag_vertical_thumb(
+                        &mut $write(scroll),
+                        track_height,
+                        thumb_height,
+                        to.y,
+                        anchor,
+                      );
+                    }
+                  }
+                  PointerSelectData::End { to, .. } => {
+                    if let Some(anchor) = $write(v_drag_anchor).take() {
+                      drag_vertical_thumb(
+                        &mut $write(scroll),
+                        track_height,
+                        thumb_height,
+                        to.y,
+                        anchor,
+                      );
+                    }
+                  }
+                }
               },
-              @(v_thumb) {
-                y: distinct_pipe!{
-                  let rate = $read(scroll).get_y_scroll_rate();
-                  let track_height = *$read(v_track.layout_height());
-                  let thumb_height = *$read(v_thumb.layout_height());
-                  rate * (track_height - thumb_height)
+              @(v_track) {
+                on_tap: move |e| if e.is_primary {
+                  let rate = e.position().y / *$read(v_track_height);
+                  let mut scroll = $write(scroll);
+                  let y = rate * scroll.max_scrollable().y;
+                  let scroll_pos = Point::new(scroll.get_scroll_pos().x, y);
+                  scroll.jump_to(scroll_pos);
+                },
+                @(v_thumb) {
+                  y: distinct_pipe!{
+                    let rate = $read(scroll).get_y_scroll_rate();
+                    let track_height = *$read(v_track_height);
+                    let thumb_height = *$read(v_thumb_height);
+                    thumb_offset(rate, track_height, thumb_height)
+                  }
                 }
               }
             }
@@ -181,6 +265,45 @@ fn h_thumb_rate(s: &ScrollableWidget) -> f32 {
 }
 fn v_thumb_rate(s: &ScrollableWidget) -> f32 {
   s.scroll_view_size().height / s.scroll_content_size().height
+}
+
+fn thumb_offset(scroll_rate: f32, track_extent: f32, thumb_extent: f32) -> f32 {
+  scroll_rate * (track_extent - thumb_extent).max(0.)
+}
+
+fn thumb_drag_anchor(
+  track_extent: f32, thumb_extent: f32, pointer_pos: f32, scroll_rate: f32,
+) -> Option<f32> {
+  let thumb_start = thumb_offset(scroll_rate, track_extent, thumb_extent);
+  (thumb_start..=thumb_start + thumb_extent)
+    .contains(&pointer_pos)
+    .then_some(pointer_pos - thumb_start)
+}
+
+fn drag_horizontal_thumb(
+  scroll: &mut ScrollableWidget, track_width: f32, thumb_width: f32, pointer_x: f32, anchor: f32,
+) {
+  let max_thumb_offset = (track_width - thumb_width).max(0.);
+  if max_thumb_offset <= 0. {
+    return;
+  }
+
+  let thumb_x = (pointer_x - anchor).clamp(0., max_thumb_offset);
+  let x = thumb_x / max_thumb_offset * scroll.max_scrollable().x;
+  scroll.jump_to(Point::new(x, scroll.get_scroll_pos().y));
+}
+
+fn drag_vertical_thumb(
+  scroll: &mut ScrollableWidget, track_height: f32, thumb_height: f32, pointer_y: f32, anchor: f32,
+) {
+  let max_thumb_offset = (track_height - thumb_height).max(0.);
+  if max_thumb_offset <= 0. {
+    return;
+  }
+
+  let thumb_y = (pointer_y - anchor).clamp(0., max_thumb_offset);
+  let y = thumb_y / max_thumb_offset * scroll.max_scrollable().y;
+  scroll.jump_to(Point::new(scroll.get_scroll_pos().x, y));
 }
 
 impl std::ops::Deref for ScrollbarDeclarer {
@@ -236,4 +359,32 @@ mod test {
     },
     LayoutCase::default().with_size(Size::new(100., 100.))
   );
+
+  #[test]
+  fn thumb_drag_helpers_update_scroll_position() {
+    let mut inner = ScrollableWidget::default();
+    inner.scrollable = Scrollable::Both;
+    let scroll = Stateful::new(inner);
+    let scroll_reader = scroll.clone_reader();
+    let scroll_writer = scroll.clone_writer();
+
+    let wnd = TestWindow::new_with_size(
+      fn_widget! {
+        let scrollbar = Scrollbar { scroll: scroll_writer.clone_writer() };
+        @(scrollbar) {
+          @Container { hint_size: Size::new(500., 500.) }
+        }
+      },
+      Size::new(100., 100.),
+    );
+    wnd.draw_frame();
+
+    let anchor = thumb_drag_anchor(100., 20., 10., 0.).unwrap();
+    drag_horizontal_thumb(&mut scroll.write(), 100., 20., 50., anchor);
+    assert_eq!(scroll_reader.read().get_scroll_pos().x, 200.);
+
+    let anchor = thumb_drag_anchor(100., 20., 10., 0.).unwrap();
+    drag_vertical_thumb(&mut scroll.write(), 100., 20., 70., anchor);
+    assert_eq!(scroll_reader.read().get_scroll_pos().y, 300.);
+  }
 }
