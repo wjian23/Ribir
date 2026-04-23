@@ -1,5 +1,5 @@
 use ribir_core::prelude::*;
-use ribir_widgets::input::{INPUT, TEXT_CARET, TEXT_SELECTION, TEXTAREA};
+use ribir_widgets::input::{INPUT, TEXT_CARET, TEXT_SELECTION, TEXTAREA, TextSelectionStyle};
 
 use crate::md;
 
@@ -21,15 +21,27 @@ pub(super) fn init(classes: &mut Classes) {
     .into_widget()
   });
 
-  classes.insert(
-    TEXT_SELECTION,
-    style_class! {
-      background: {
-        let color = BuildCtx::color();
-        color.into_container_color(BuildCtx::get()).map(|c| c.with_alpha(0.8))
-      }
-    },
-  );
+  classes.insert(TEXT_SELECTION, |w| {
+    let brush = BuildCtx::color()
+      .into_container_color(BuildCtx::get())
+      .map(|c| Brush::from(c.with_alpha(0.8)))
+      .into_pipe_value();
+    let (brush, brush_pipe) = brush.unzip();
+    let style = Stateful::new(TextSelectionStyle { brush });
+    let mut w = FatObj::new(w);
+    if let Some(pipe) = brush_pipe {
+      let style = style.clone_writer();
+      let subscription = pipe
+        .subscribe(move |brush| style.write().brush = brush)
+        .unsubscribe_when_dropped();
+      w.on_disposed(move |_| drop(subscription));
+    }
+    providers! {
+      providers: [Provider::writer(style, Some(DirtyPhase::Paint))],
+      @ { w }
+    }
+    .into_widget()
+  });
 
   fn input_border(w: Widget) -> Widget {
     let mut w = FatObj::new(w);

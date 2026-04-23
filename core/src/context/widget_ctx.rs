@@ -1,4 +1,7 @@
-use std::ptr::NonNull;
+use std::{
+  collections::{HashMap, HashSet},
+  ptr::NonNull,
+};
 
 use ribir_algo::Rc;
 use ribir_types::{Point, Rect, Size};
@@ -36,6 +39,11 @@ pub trait WidgetCtx {
 
   /// Return the iterator of children of widget.
   fn children(&self) -> impl Iterator<Item = WidgetId> + '_;
+  /// Sort items by the preorder position of their widget ids in the subtree
+  /// rooted at `root`.
+  fn sort_by_tree_order<T>(
+    &self, root: WidgetId, items: &mut [T], widget_id: impl FnMut(&T) -> WidgetId,
+  );
 
   /// Return the first child of widget.
   fn first_child(&self) -> Option<WidgetId>;
@@ -135,6 +143,22 @@ impl<T: WidgetCtxImpl> WidgetCtx for T {
 
   #[inline]
   fn children(&self) -> impl Iterator<Item = WidgetId> + '_ { self.id().children(self.tree()) }
+
+  fn sort_by_tree_order<U>(
+    &self, root: WidgetId, items: &mut [U], mut widget_id: impl FnMut(&U) -> WidgetId,
+  ) {
+    let target_ids = items
+      .iter()
+      .map(&mut widget_id)
+      .collect::<HashSet<_>>();
+    let order = root
+      .descendants(self.tree())
+      .enumerate()
+      .filter_map(|(idx, id)| target_ids.contains(&id).then_some((id, idx)))
+      .collect::<HashMap<_, _>>();
+
+    items.sort_by_key(|item| order.get(&widget_id(item)));
+  }
 
   #[inline]
   fn box_rect(&self) -> Option<Rect> { self.widget_box_rect(self.id()) }

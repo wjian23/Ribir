@@ -504,7 +504,6 @@ where
 
   fn caret_rect(&self, caret: Caret) -> Rect {
     let cursor = self.caret_to_cursor(caret);
-    let caret = self.cursor_to_caret(cursor);
     if let Some(VisualPosition { line, slot }) = caret.visual {
       let (line, slot) = self.clamp_visual_position(line.0, slot);
       self.visual_line(line).caret_rect(slot)
@@ -700,7 +699,7 @@ where
   fn caret_visual(&self, caret: Caret) -> (usize, usize) {
     caret
       .visual
-      .or_else(|| self.find_visual(CursorKey::from_cursor(self.caret_to_cursor(caret))))
+      .or_else(|| self.visual_from_cursor(self.caret_to_cursor(caret)))
       .map(|position| (position.line.0, position.slot))
       .unwrap_or((0, 0))
   }
@@ -720,6 +719,14 @@ where
 
   fn caret_to_cursor(&self, caret: Caret) -> ParleyCursor {
     ParleyCursor::from_byte_index(&self.layout, caret.byte.0, parley_affinity(caret.affinity))
+  }
+
+  fn visual_from_cursor(&self, cursor: ParleyCursor) -> Option<VisualPosition> {
+    let rect = rect_from_box(cursor.geometry(&self.layout, CARET_WIDTH))
+      .translate(self.payload.origin_offset);
+    let line = self.line_index_for_y(rect.center().y);
+    let x = rect.min_x() + self.line_x_offset(line);
+    Some(VisualPosition { line: LineIndex(line), slot: self.nearest_visual_slot(line, x) })
   }
 
   fn find_visual(&self, key: CursorKey) -> Option<VisualPosition> {

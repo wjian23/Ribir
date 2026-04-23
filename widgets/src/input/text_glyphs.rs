@@ -8,7 +8,7 @@ use ribir_core::{
   text::{single_style_paragraph_style, single_style_span_style},
 };
 
-use super::{CaretPosition, edit_text::BaseText};
+use super::{CaretPosition, edit_text::BaseText, text_selectable::TextPosition};
 
 /// [`TextGlyphs`]
 ///
@@ -53,10 +53,89 @@ pub trait VisualText: BaseText {
 impl VisualText for CowArc<str> {
   fn layout_glyphs(&self, clamp: BoxClamp, ctx: &MeasureCtx) -> ParagraphLayoutRef {
     let style = Provider::of::<TextStyle>(ctx).unwrap();
-    let paragraph_style = single_style_paragraph_style(&style, TextAlign::Start);
+    let text_align = Provider::of::<TextAlign>(ctx)
+      .map(|align| *align)
+      .unwrap_or_default();
+    let paragraph_style = single_style_paragraph_style(&style, text_align);
     let paragraph = AppCtx::text_services()
       .paragraph(AttributedText::styled(self.to_string(), single_style_span_style(&style, None)));
     paragraph.layout(&style, &paragraph_style, clamp)
+  }
+
+  fn paint(
+    &self, painter: &mut Painter, style: PaintingStyle, glyphs: &ParagraphLayoutRef, rect: Rect,
+  ) {
+    let _ = (style, rect);
+    let brush = painter.fill_brush().clone();
+    if !brush.is_visible() {
+      return;
+    }
+    painter.draw_text_payload(
+      Resource::new(glyphs.draw_payload().clone()),
+      glyphs.draw_payload().bounds,
+    );
+  }
+}
+
+fn attributed_text_with_default_decoration(
+  text: &AttributedText, default_decoration: Option<TextDecorationStyle>,
+) -> AttributedText {
+  let Some(default_decoration) = default_decoration.filter(|style| !style.decoration.is_empty())
+  else {
+    return text.clone();
+  };
+  if text.is_empty() {
+    return text.clone();
+  }
+
+  let mut spans = Vec::with_capacity(text.spans.len().saturating_mul(2).max(1));
+  let mut cursor = 0;
+
+  for span in text.spans.iter() {
+    if cursor < span.range.start.0 {
+      spans.push(TextSpan {
+        range: TextRange::new(cursor, span.range.start.0),
+        style: SpanStyle { decoration: Some(default_decoration.clone()), ..Default::default() },
+      });
+    }
+
+    let mut span = span.clone();
+    match span.style.decoration.as_mut() {
+      Some(decoration) if decoration.decoration.is_empty() => {
+        decoration.decoration = default_decoration.decoration;
+        decoration.decoration_color = decoration
+          .decoration_color
+          .or(default_decoration.decoration_color);
+      }
+      Some(_) => {}
+      None => span.style.decoration = Some(default_decoration.clone()),
+    }
+    cursor = span.range.end.0;
+    spans.push(span);
+  }
+
+  if cursor < text.len_bytes() {
+    spans.push(TextSpan {
+      range: TextRange::new(cursor, text.len_bytes()),
+      style: SpanStyle { decoration: Some(default_decoration), ..Default::default() },
+    });
+  }
+
+  AttributedText::from_parts(text.text.clone(), spans)
+}
+
+impl VisualText for AttributedText {
+  fn layout_glyphs(&self, clamp: BoxClamp, ctx: &MeasureCtx) -> ParagraphLayoutRef {
+    let style = Provider::of::<TextStyle>(ctx).unwrap();
+    let text_align = Provider::of::<TextAlign>(ctx)
+      .map(|align| *align)
+      .unwrap_or_default();
+    let text_decoration = Provider::of::<TextDecorationStyle>(ctx).map(|style| (*style).clone());
+    let paragraph_style = single_style_paragraph_style(&style, text_align);
+    let text = attributed_text_with_default_decoration(self, text_decoration);
+    AppCtx::text_services()
+      .paragraph(text)
+      .layout(&style, &paragraph_style, clamp)
   }
 
   fn paint(
@@ -113,7 +192,13 @@ impl<T: VisualText + 'static> Render for TextGlyphs<T> {
 }
 
 pub trait ParagraphLayoutExt {
+  fn hit_test_position(&self, pos: Point) -> Option<TextPosition>;
+
+  fn nearest_position(&self, pos: Point) -> TextPosition;
+
   fn caret_position_from_pos(&self, pos: Point) -> CaretPosition;
+
+  fn caret_box(&self, caret: CaretPosition) -> Rect;
 
   fn line_end(&self, caret: CaretPosition) -> CaretPosition;
 
@@ -155,9 +240,18 @@ fn from_caret(caret: Caret) -> CaretPosition {
 }
 
 impl ParagraphLayoutExt for ParagraphLayout {
-  fn caret_position_from_pos(&self, pos: Point) -> CaretPosition {
+  fn hit_test_position(&self, pos: Point) -> Option<TextPosition> {
+    let hit = self.hit_test_point(pos);
+    hit.is_inside.then(|| from_caret(hit.caret))
+  }
+
+  fn nearest_position(&self, pos: Point) -> TextPosition {
     from_caret(self.hit_test_point(pos).caret)
   }
+
+  fn caret_position_from_pos(&self, pos: Point) -> CaretPosition { self.nearest_position(pos) }
+
+  fn caret_box(&self, caret: CaretPosition) -> Rect { self.caret_rect(to_caret(caret)) }
 
   fn line_end(&self, caret: CaretPosition) -> CaretPosition {
     from_caret(self.line_end_caret(to_caret(caret)))
@@ -211,9 +305,14 @@ impl ParagraphLayoutExt for ParagraphLayout {
 }
 
 impl ParagraphLayoutExt for ParagraphLayoutRef {
+  fn hit_test_position(&self, pos: Point) -> Option<TextPosition> {
+    self.as_ref().hit_test_position(pos)
+  }
+  fn nearest_position(&self, pos: Point) -> TextPosition { self.as_ref().nearest_position(pos) }
   fn caret_position_from_pos(&self, pos: Point) -> CaretPosition {
     self.as_ref().caret_position_from_pos(pos)
   }
+  fn caret_box(&self, caret: CaretPosition) -> Rect { self.as_ref().caret_box(caret) }
   fn line_end(&self, caret: CaretPosition) -> CaretPosition { self.as_ref().line_end(caret) }
   fn line_begin(&self, caret: CaretPosition) -> CaretPosition { self.as_ref().line_begin(caret) }
   fn cluster_from_glyph_position(&self, row: usize, col: usize) -> usize {
@@ -450,6 +549,18 @@ mod tests {
     assert_eq!(glyphs.prev(CaretPosition { position: None, ..last_line_start }), expected_prev);
     assert_eq!(glyphs.prev(CaretPosition { position: None, ..expected_prev }), expected_prev_prev);
     assert_eq!(glyphs.up(CaretPosition { position: None, ..last_line_start }), expected_up);
+  }
+
+  #[test]
+  fn glyph_cursor_and_line_boundary_keep_visual_slot_when_position_is_missing() {
+    let glyphs = build_wrapped_multiline_glyphs();
+    let last_line_start = last_line_start(&glyphs);
+    let missing_visual = CaretPosition { position: None, ..last_line_start };
+
+    assert_eq!(glyphs.cursor(missing_visual), glyphs.cursor(last_line_start));
+    assert_eq!(glyphs.caret_box(missing_visual), glyphs.caret_box(last_line_start));
+    assert_eq!(glyphs.line_begin(missing_visual), glyphs.line_begin(last_line_start));
+    assert_eq!(glyphs.line_end(missing_visual), glyphs.line_end(last_line_start));
   }
 
   #[test]

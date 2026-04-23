@@ -74,3 +74,35 @@ impl<'c> ComposeChild<'c> for PointerSelectRegion {
     .into_widget()
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use ribir_core::{prelude::*, reset_test_env, test_helper::*};
+
+  use super::*;
+
+  #[test]
+  fn double_tap_is_preserved_while_drag_grabs_pointer() {
+    reset_test_env!();
+
+    let taps = Stateful::new(0usize);
+    let w = fn_widget! {
+      @PointerSelectRegion {
+        on_double_tap: move |_| *$write(taps) += 1,
+        @MockBox { size: Size::new(100., 100.) }
+      }
+    };
+
+    let wnd = TestWindow::new_with_size(w, Size::new(100., 100.));
+    wnd.draw_frame();
+
+    for _ in 0..2 {
+      wnd.process_cursor_move(Point::new(50., 50.));
+      wnd.process_mouse_press(Box::new(DummyDeviceId), MouseButtons::PRIMARY);
+      wnd.process_mouse_release(Box::new(DummyDeviceId), MouseButtons::PRIMARY);
+      wnd.draw_frame();
+    }
+
+    assert_eq!(*taps.read(), 1);
+  }
+}

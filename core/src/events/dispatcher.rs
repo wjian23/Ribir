@@ -177,11 +177,15 @@ impl Dispatcher {
     self.info.set_device_id(device_id);
 
     let hit = self.hit_widget();
-
     let wnd = self.window();
     let grab_pointer = *self.grab_mouse_wid.borrow();
     if let Some(grab_pointer) = grab_pointer {
       wnd.add_delay_event(DelayEvent::GrabPointerUp(grab_pointer));
+      if let Some(hit) = hit
+        && grab_pointer.ancestor_of(hit, wnd.tree())
+      {
+        wnd.add_delay_event(DelayEvent::Tap(hit));
+      }
     } else {
       if let Some(hit) = hit {
         wnd.add_delay_event(DelayEvent::PointerUp(hit));

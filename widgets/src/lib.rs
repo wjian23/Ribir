@@ -44,6 +44,7 @@ pub mod rich_text;
 pub mod router;
 pub mod scrollbar;
 pub mod select_region;
+pub mod selectable_area;
 pub mod slider;
 pub mod switch;
 pub mod tabs;
@@ -65,7 +66,8 @@ pub mod prelude {
     animation::*, avatar::*, badge::*, buttons::*, checkbox::*, common_widget::*, divider::*,
     grid_view::*, icon::*, input::*, label::*, layout::*, list::*, menu::*, navigation_rail::*,
     overlay::*, path::*, progress::*, radio::*, rich_text::*, router::*, scrollbar::*,
-    select_region::*, slider::*, switch::*, tabs::*, tooltip::*, transform_box::*,
+    select_region::*, selectable_area::*, slider::*, switch::*, tabs::*, tooltip::*,
+    transform_box::*,
   };
   pub use crate::{cases, transitions};
 }

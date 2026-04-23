@@ -1,14 +1,22 @@
-use std::{
-  any::Any,
-  cell::{Ref, RefCell},
-};
+use std::any::Any;
 
 use ribir_core::{
   prelude::*,
-  text::{CaretAffinity, LineHeight, TextHitResult, TextRange, single_style_paragraph_style},
+  text::{CaretAffinity, LineHeight, TextHitResult, TextRange},
 };
 use rxrust::subscription::BoxedSubscription;
 use smallvec::SmallVec;
+
+use crate::{
+  input::{
+    BaseText, BoundaryResult, MoveMode, Selectable, SelectableWithContent, TextGlyphs,
+    TextPosition, TextSelectionRange,
+  },
+  selectable_area::{
+    SelectionCoordinatorHandle, TextAreaData, register_to_parent_selection_coordinator,
+    wrap_with_default_selection_area,
+  },
+};
 
 pub type SpanStyleValue<T> = Option<PipeValue<T>>;
 
@@ -20,6 +28,19 @@ pub struct RichTextSegmentTapData {
   pub range: TextRange,
   pub text: CowArc<str>,
   pub data: Option<RichTextSpanData>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RichTextSelectedSegment {
+  pub index: usize,
+  pub range: TextRange,
+  pub text: CowArc<str>,
+  pub data: Option<RichTextSpanData>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RichTextSelectionData {
+  pub segments: Vec<RichTextSelectedSegment>,
 }
 
 impl RichTextSegmentTapData {
@@ -265,18 +286,16 @@ impl SpanSnapshot {
       })
       .or_else(|| inherited_decoration.map(|style| style.decoration))
       .unwrap_or_default();
-    if decoration.is_empty() {
+    let decoration_color = self
+      .text_decoration
+      .as_ref()
+      .and_then(|style| style.decoration_color)
+      .or_else(|| inherited_decoration.and_then(|style| style.decoration_color));
+    if decoration.is_empty() && decoration_color.is_none() {
       return None;
     }
 
-    Some(TextDecorationStyle {
-      decoration,
-      decoration_color: self
-        .text_decoration
-        .as_ref()
-        .and_then(|style| style.decoration_color)
-        .or_else(|| inherited_decoration.and_then(|style| style.decoration_color)),
-    })
+    Some(TextDecorationStyle { decoration, decoration_color })
   }
 
   #[inline]
@@ -316,6 +335,11 @@ enum RichTextFragment {
 
 type RichTextSubscriptions = SmallVec<[BoxedSubscription; 1]>;
 
+fn sync_text_host(this: &mut RichText) {
+  let text = append_declared_fragments(&this.fragments, None);
+  *this.text.write().text_mut() = text;
+}
+
 fn push_fragment_subscription<T: 'static>(
   subscriptions: &mut RichTextSubscriptions, this: &impl StateWriter<Value = RichText>,
   index: usize, stream: Option<ValueStream<T>>, update: fn(&mut RichTextFragment, T),
@@ -331,6 +355,7 @@ fn push_fragment_subscription<T: 'static>(
           .expect("rich text fragment should exist"),
         value,
       );
+      sync_text_host(&mut rich_text);
     })));
   }
 }
@@ -426,6 +451,8 @@ fn fragments_from_children(
   children
     .into_iter()
     .for_each(|child| push_child_fragment(child, this, &mut subscriptions));
+  let mut rich_text = this.write();
+  sync_text_host(&mut rich_text);
   subscriptions
 }
 
@@ -499,6 +526,36 @@ fn segment_from_hit(
   }
 
   None
+}
+
+fn selected_segments(
+  fragments: &[RichTextFragment], range: &TextSelectionRange,
+) -> Vec<RichTextSelectedSegment> {
+  let rg = range.cluster_rg();
+  let mut start = 0;
+  let mut segments = Vec::new();
+
+  for (index, fragment) in fragments.iter().enumerate() {
+    let text = fragment.text();
+    let end = start + text.len();
+    let selected = rg.start.max(start)..rg.end.min(end);
+
+    if !selected.is_empty() {
+      segments.push(RichTextSelectedSegment {
+        index,
+        range: TextRange::new(selected.start, selected.end),
+        text: text
+          .substr(selected.start - start..selected.end - start)
+          .to_string()
+          .into(),
+        data: fragment.data().cloned(),
+      });
+    }
+
+    start = end;
+  }
+
+  segments
 }
 
 impl RichTextFragment {
@@ -582,72 +639,24 @@ pub struct RichText {
   fragments: Vec<RichTextFragment>,
 
   #[declare(skip)]
-  layout: RefCell<Option<ParagraphLayoutRef>>,
+  text: Stateful<TextGlyphs<AttributedText>>,
 }
 
-fn rich_text_layout(
-  text: AttributedText, text_style: &TextStyle, text_align: TextAlign, clamp: BoxClamp,
-) -> ParagraphLayoutRef {
-  let paragraph_style = single_style_paragraph_style(text_style, text_align);
-  let paragraph = AppCtx::text_services().paragraph(text);
-  paragraph.layout(text_style, &paragraph_style, clamp)
+#[declare]
+#[derive(Default)]
+pub struct RichTextSelectable {
+  #[declare(skip)]
+  host: RichText,
 }
 
-impl Render for RichText {
-  fn measure(&self, clamp: BoxClamp, ctx: &mut MeasureCtx) -> Size {
-    let style = Provider::of::<TextStyle>(ctx).unwrap();
-    let text_decoration = Provider::of::<TextDecorationStyle>(ctx)
-      .map(|style| (*style).clone())
-      .filter(|style| !style.decoration.is_empty());
-    let text_align = Provider::of::<TextAlign>(ctx)
-      .map(|align| *align)
-      .unwrap_or_default();
-    let text = self.combined_text(text_decoration.as_ref());
-    let layout = rich_text_layout(text, &style, text_align, clamp);
-    let size = layout.size();
-    *self.layout.borrow_mut() = Some(layout);
-    size
-  }
-
-  #[inline]
-  fn size_affected_by_child(&self) -> bool { false }
-
-  fn paint(&self, ctx: &mut PaintingCtx) {
-    let style = Provider::of::<PaintingStyle>(ctx).map(|p| p.clone());
-    let Some(layout) = self.layout.borrow().clone() else {
-      return;
-    };
-    let brush = ctx.painter().fill_brush().clone();
-    if !brush.is_visible() {
-      return;
-    }
-
-    let payload = Resource::new(layout.draw_payload().clone());
-    let rect = layout.draw_payload().bounds;
-    let _ = style;
-    ctx.painter().draw_text_payload(payload, rect);
-  }
-
-  #[cfg(feature = "debug")]
-  fn debug_name(&self) -> std::borrow::Cow<'static, str> { std::borrow::Cow::Borrowed("rich_text") }
-
-  #[cfg(feature = "debug")]
-  fn debug_properties(&self) -> serde_json::Value {
-    let text = self.combined_text(None);
-    serde_json::json!({
-      "text": &*text.text,
-      "span_count": text.spans.len(),
-      "fragment_count": self.fragments.len(),
-    })
-  }
-}
-
-impl ComposeChild<'static> for RichText {
-  type Child = Vec<RichTextChild>;
-
-  fn compose_child(this: impl StateWriter<Value = Self>, child: Self::Child) -> Widget<'static> {
-    let subscriptions = fragments_from_children(&this, child);
-    fn_widget! {
+fn compose_rich_text(
+  this: impl StateWriter<Value = RichText>, child: Vec<RichTextChild>,
+) -> Widget<'static> {
+  let subscriptions = fragments_from_children(&this, child);
+  let text = this.read().text.clone_writer();
+  fn_widget! {
+    @Providers {
+      providers: [Provider::writer(text.clone_writer(), Some(DirtyPhase::Layout))],
       @FatObj {
         on_tap: move |e| {
           if let Some(segment) = $read(this).hit_test_segment(e.position()) {
@@ -657,7 +666,36 @@ impl ComposeChild<'static> for RichText {
         on_disposed: move |_| {
           unsubscribe_subscriptions(subscriptions);
         },
-        @ { this.clone_boxed_watcher() }
+        @ { text }
+      }
+    }
+  }
+  .into_widget()
+}
+
+impl ComposeChild<'static> for RichText {
+  type Child = Vec<RichTextChild>;
+
+  fn compose_child(this: impl StateWriter<Value = Self>, child: Self::Child) -> Widget<'static> {
+    compose_rich_text(this, child)
+  }
+}
+
+impl ComposeChild<'static> for RichTextSelectable {
+  type Child = Vec<RichTextChild>;
+
+  fn compose_child(this: impl StateWriter<Value = Self>, child: Self::Child) -> Widget<'static> {
+    fn_widget! {
+      let host = part_writer!(&mut this.host);
+      let root = compose_rich_text(host.clone_writer(), child);
+      let selectable =
+        fn_widget! { register_to_parent_selection_coordinator(root, host.clone_writer()) }
+          .into_widget();
+
+      if Provider::of::<SelectionCoordinatorHandle>(BuildCtx::get()).is_some() {
+        selectable
+      } else {
+        wrap_with_default_selection_area(selectable)
       }
     }
     .into_widget()
@@ -665,30 +703,165 @@ impl ComposeChild<'static> for RichText {
 }
 
 impl RichText {
-  pub fn layout(&self) -> Option<Ref<'_, ParagraphLayoutRef>> {
-    Ref::filter_map(self.layout.borrow(), |v| v.as_ref()).ok()
+  pub fn layout(&self) -> Option<ParagraphLayoutRef> {
+    self.text.read().glyphs().map(|g| g.clone())
   }
 
   pub fn hit_test_segment(&self, pos: Point) -> Option<RichTextSegmentTapData> {
     let layout = self.layout()?;
     segment_from_hit(&self.fragments, layout.hit_test_point(pos))
   }
+}
 
-  #[inline]
-  fn combined_text(&self, default_decoration: Option<&TextDecorationStyle>) -> AttributedText {
-    append_declared_fragments(&self.fragments, default_decoration)
+impl Selectable for RichText {
+  type Position = TextPosition;
+  type Range = TextSelectionRange;
+
+  fn hit_test(&self, point: Point) -> Option<TextPosition> {
+    let text = self.text.read();
+    Selectable::hit_test(&*text, point)
+  }
+
+  fn nearest_position(&self, point: Point) -> Option<TextPosition> {
+    let text = self.text.read();
+    Selectable::nearest_position(&*text, point)
+  }
+
+  fn first_position(&self) -> Option<TextPosition> {
+    let text = self.text.read();
+    Selectable::first_position(&*text)
+  }
+
+  fn last_position(&self) -> Option<TextPosition> {
+    let text = self.text.read();
+    Selectable::last_position(&*text)
+  }
+
+  fn move_left(&self, pos: &TextPosition, mode: MoveMode) -> BoundaryResult<TextPosition> {
+    let text = self.text.read();
+    Selectable::move_left(&*text, pos, mode)
+  }
+
+  fn move_right(&self, pos: &TextPosition, mode: MoveMode) -> BoundaryResult<TextPosition> {
+    let text = self.text.read();
+    Selectable::move_right(&*text, pos, mode)
+  }
+
+  fn move_up(&self, pos: &TextPosition) -> BoundaryResult<TextPosition> {
+    let text = self.text.read();
+    Selectable::move_up(&*text, pos)
+  }
+
+  fn move_down(&self, pos: &TextPosition) -> BoundaryResult<TextPosition> {
+    let text = self.text.read();
+    Selectable::move_down(&*text, pos)
+  }
+
+  fn make_range(&self, anchor: TextPosition, focus: TextPosition) -> TextSelectionRange {
+    let text = self.text.read();
+    Selectable::make_range(&*text, anchor, focus)
+  }
+
+  fn is_collapsed(&self, range: &TextSelectionRange) -> bool {
+    let text = self.text.read();
+    Selectable::is_collapsed(&*text, range)
+  }
+
+  fn caret_rect(&self, pos: &TextPosition) -> Option<Rect> {
+    let text = self.text.read();
+    Selectable::caret_rect(&*text, pos)
+  }
+
+  fn selection_rects(&self, range: &TextSelectionRange) -> Vec<Rect> {
+    let text = self.text.read();
+    Selectable::selection_rects(&*text, range)
+  }
+
+  fn select_unit(&self, pos: &TextPosition, mode: MoveMode) -> Option<TextSelectionRange> {
+    let text = self.text.read();
+    Selectable::select_unit(&*text, pos, mode)
+  }
+}
+
+impl SelectableWithContent for RichText {
+  fn selection_text(&self, range: &TextSelectionRange) -> String {
+    self
+      .text
+      .read()
+      .text()
+      .substr(range.cluster_rg())
+      .to_string()
+  }
+
+  fn selected_content(&self, range: &TextSelectionRange) -> TextAreaData {
+    let segments = selected_segments(&self.fragments, range);
+    TextAreaData {
+      text: self
+        .text
+        .read()
+        .text()
+        .substr(range.cluster_rg())
+        .to_string()
+        .into(),
+      custom_data: (!segments.is_empty())
+        .then_some(Box::new(RichTextSelectionData { segments }) as Box<dyn Any>),
+      ..Default::default()
+    }
   }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+  use std::{
+    borrow::Cow,
+    io::{Error, ErrorKind},
+  };
+
   use ribir_core::{
+    clipboard::Clipboard,
     prelude::*,
     test_helper::*,
     text::{LineHeight, TextRange},
+    window::UiEvent,
   };
+  use winit::event::ElementState;
 
   use crate::prelude::*;
+
+  #[derive(Default)]
+  struct TestClipboard {
+    text: String,
+  }
+
+  impl Clipboard for TestClipboard {
+    fn read_text(&mut self) -> Result<String, Error> { Ok(self.text.clone()) }
+
+    fn write_text(&mut self, text: &str) -> Result<(), Error> {
+      self.text = text.into();
+      Ok(())
+    }
+
+    fn read_img(&mut self) -> Result<PixelImage, Error> {
+      Err(Error::new(ErrorKind::Unsupported, "clipboard read_img"))
+    }
+
+    fn write_img(&mut self, _: &PixelImage) -> Result<(), Error> {
+      Err(Error::new(ErrorKind::Unsupported, "clipboard write_img"))
+    }
+
+    fn read(&mut self, _: &str) -> Result<Cow<'_, [u8]>, Error> {
+      Err(Error::new(ErrorKind::Unsupported, "clipboard read"))
+    }
+
+    fn write(&mut self, _: &str, _: &[u8]) -> Result<(), Error> {
+      Err(Error::new(ErrorKind::Unsupported, "clipboard write"))
+    }
+
+    fn clear(&mut self) -> Result<(), Error> {
+      self.text.clear();
+      Ok(())
+    }
+  }
 
   fn dejavu_face() -> FontFace {
     FontFace { families: Box::new([FontFamily::Name("DejaVu Sans".into())]), ..Default::default() }
@@ -1336,6 +1509,198 @@ mod tests {
     assert_eq!(
       decoration_kinds(&cmd),
       vec![TextDecoration::UNDERLINE, TextDecoration::THROUGHLINE]
+    );
+  }
+
+  #[test]
+  fn rich_text_in_selectable_area_exposes_selected_segment_data() {
+    reset_test_env!();
+    register_test_font();
+
+    let area_state = Stateful::new(SelectableArea::default());
+    let area = area_state.clone_writer();
+    let area_for_layout = area_state.clone_writer();
+    let queried = Stateful::new(false);
+
+    let wnd = TestWindow::new_with_size(
+      fn_widget! {
+        let rich = fn_widget! {
+          @RichTextSelectable {
+            text_style: test_text_style(),
+            foreground: Color::WHITE,
+            @ { "Hello " }
+            @Span {
+              data: 42_i32,
+              text: "Docs",
+              font: dejavu_face(),
+              font_size: 16.,
+              letter_spacing: 0.,
+              foreground: Color::BLUE,
+            }
+          }
+        }
+        .into_widget();
+        let area = SelectableArea::compose_child(
+          area.clone_writer(),
+          vec![rich],
+        );
+
+        @FatObj {
+          on_performed_layout: move |e| {
+            if *$read(queried) {
+              return;
+            }
+            *$write(queried) = true;
+            let _ = $read(area_for_layout).select_all(e);
+          },
+          @ { area }
+        }
+      },
+      Size::new(240., 40.),
+    );
+
+    wnd.draw_frame();
+
+    let selection = area_state.read().selection_data();
+    assert_eq!(selection_text(&selection).as_deref(), Some("Hello Docs"));
+    let rich = selection[0]
+      .custom_data_as::<RichTextSelectionData>()
+      .expect("expected rich text segment payload");
+    assert_eq!(rich.segments.len(), 2);
+    assert_eq!(&*rich.segments[0].text, "Hello ");
+    assert_eq!(&*rich.segments[1].text, "Docs");
+    assert_eq!(
+      rich.segments[1]
+        .data
+        .as_ref()
+        .and_then(|data| data.downcast_ref::<i32>()),
+      Some(&42),
+    );
+  }
+
+  #[test]
+  fn rich_text_selectable_standalone_selection_uses_default_area_copy() {
+    reset_test_env!();
+    register_test_font();
+    AppCtx::set_clipboard(Box::new(TestClipboard::default()));
+
+    let mut wnd = TestWindow::new_with_size(
+      fn_widget! {
+        @RichTextSelectable {
+          text_style: test_text_style(),
+          foreground: Color::WHITE,
+          @ { "Hello " }
+          @Span {
+            text: "Docs",
+            font: dejavu_face(),
+            font_size: 16.,
+            letter_spacing: 0.,
+            foreground: Color::BLUE,
+          }
+        }
+      },
+      Size::new(240., 40.),
+    );
+
+    wnd.draw_frame();
+    let initial = last_text_command(
+      wnd
+        .take_last_frame()
+        .expect("expected initial frame"),
+    );
+    tap_on(&wnd, tap_pos_for_run(&initial, 1));
+    wnd.draw_frame();
+
+    assert!(AppCtx::send_ui_event(UiEvent::ModifiersChanged {
+      wnd_id: wnd.id(),
+      state: ModifiersState::CONTROL,
+    }));
+    AppCtx::run_until_stalled();
+    wnd.process_keyboard_event(
+      PhysicalKey::Code(KeyCode::KeyA),
+      VirtualKey::Character("a".into()),
+      false,
+      KeyLocation::Standard,
+      ElementState::Pressed,
+    );
+    wnd.process_keyboard_event(
+      PhysicalKey::Code(KeyCode::KeyC),
+      VirtualKey::Character("c".into()),
+      false,
+      KeyLocation::Standard,
+      ElementState::Pressed,
+    );
+    wnd.draw_frame();
+
+    assert_eq!(
+      AppCtx::clipboard()
+        .borrow_mut()
+        .read_text()
+        .unwrap(),
+      "Hello Docs"
+    );
+  }
+
+  #[test]
+  fn rich_text_is_not_selectable_by_default() {
+    reset_test_env!();
+    register_test_font();
+    AppCtx::set_clipboard(Box::new(TestClipboard::default()));
+
+    let mut wnd = TestWindow::new_with_size(
+      fn_widget! {
+        @RichText {
+          text_style: test_text_style(),
+          foreground: Color::WHITE,
+          @ { "Hello " }
+          @Span {
+            text: "Docs",
+            font: dejavu_face(),
+            font_size: 16.,
+            letter_spacing: 0.,
+            foreground: Color::BLUE,
+          }
+        }
+      },
+      Size::new(240., 40.),
+    );
+
+    wnd.draw_frame();
+    let initial = last_text_command(
+      wnd
+        .take_last_frame()
+        .expect("expected initial frame"),
+    );
+    tap_on(&wnd, tap_pos_for_run(&initial, 1));
+    wnd.draw_frame();
+
+    assert!(AppCtx::send_ui_event(UiEvent::ModifiersChanged {
+      wnd_id: wnd.id(),
+      state: ModifiersState::CONTROL,
+    }));
+    AppCtx::run_until_stalled();
+    wnd.process_keyboard_event(
+      PhysicalKey::Code(KeyCode::KeyA),
+      VirtualKey::Character("a".into()),
+      false,
+      KeyLocation::Standard,
+      ElementState::Pressed,
+    );
+    wnd.process_keyboard_event(
+      PhysicalKey::Code(KeyCode::KeyC),
+      VirtualKey::Character("c".into()),
+      false,
+      KeyLocation::Standard,
+      ElementState::Pressed,
+    );
+    wnd.draw_frame();
+
+    assert_eq!(
+      AppCtx::clipboard()
+        .borrow_mut()
+        .read_text()
+        .unwrap(),
+      ""
     );
   }
 }

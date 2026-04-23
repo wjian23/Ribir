@@ -1,9 +1,9 @@
 use std::ops::Range;
 
-use ribir_core::prelude::{CowArc, Substr};
+use ribir_core::prelude::{AttributedText, CowArc, Substr};
 use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
-pub trait BaseText: Eq {
+pub trait BaseText {
   fn measure_bytes(&self, byte_from: usize, char_len: isize) -> usize;
   fn select_token(&self, byte_from: usize) -> Range<usize>;
   fn substr(&self, rg: Range<usize>) -> Substr;
@@ -17,10 +17,24 @@ pub trait EditText: BaseText {
   fn del_rg_str(&mut self, rg: Range<usize>) -> Range<usize>;
 }
 
+fn nearest_char_boundary(text: &str, byte_from: usize) -> usize {
+  let byte_from = byte_from.min(text.len());
+  if text.is_char_boundary(byte_from) {
+    return byte_from;
+  }
+
+  let mut boundary = byte_from;
+  while boundary > 0 && !text.is_char_boundary(boundary) {
+    boundary -= 1;
+  }
+  boundary
+}
+
 impl BaseText for CowArc<str> {
   fn len(&self) -> usize { str::len(self) }
   fn substr(&self, rg: Range<usize>) -> Substr { self.substr(rg) }
   fn measure_bytes(&self, byte_from: usize, char_len: isize) -> usize {
+    let byte_from = nearest_char_boundary(self, byte_from);
     let mut len = char_len.abs();
     let is_backward = char_len > 0;
 
@@ -40,6 +54,7 @@ impl BaseText for CowArc<str> {
     if byte_from >= self.len() {
       return Range { start: self.len(), end: self.len() };
     }
+    let byte_from = nearest_char_boundary(self, byte_from);
     let mut legacy = GraphemeCursor::new(byte_from, self.len(), true);
     let is_whitespace = self[byte_from..]
       .chars()
@@ -90,5 +105,40 @@ impl EditText for CowArc<str> {
       *self = s.into();
     }
     rg
+  }
+}
+
+impl BaseText for AttributedText {
+  fn len(&self) -> usize { self.len_bytes() }
+
+  fn substr(&self, rg: Range<usize>) -> Substr { self.text.substr(rg) }
+
+  fn measure_bytes(&self, byte_from: usize, char_len: isize) -> usize {
+    self.text.measure_bytes(byte_from, char_len)
+  }
+
+  fn select_token(&self, byte_from: usize) -> Range<usize> { self.text.select_token(byte_from) }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn select_token_accepts_non_char_boundary_index() {
+    let text: CowArc<str> = "234 浮动洒".into();
+
+    assert!(
+      !text
+        .substr(text.select_token(12))
+        .to_string()
+        .is_empty()
+    );
+    assert!(
+      !text
+        .substr(text.select_token(11))
+        .to_string()
+        .is_empty()
+    );
   }
 }

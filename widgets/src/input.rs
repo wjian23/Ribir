@@ -61,9 +61,7 @@ impl Input {
       .filter(|c| *c != '\n' && *c != '\r')
       .collect::<String>();
     *self.basic.text_mut() = InputText::new(v);
-    let selection = &mut self.basic.selection;
-    selection.from = CaretPosition::default();
-    selection.to = CaretPosition::default();
+    *self.basic.selection_range_mut() = TextSelectionRange::default();
   }
 
   pub fn text(&self) -> &CowArc<str> { &self.basic.text().0 }
@@ -71,9 +69,8 @@ impl Input {
   /// set the caret selection, and the caret position will be set to the `to`
   /// cluster
   pub fn select(&mut self, from: usize, to: usize) {
-    let selection = &mut self.basic.selection;
-    selection.from = CaretPosition::new(from);
-    selection.to = CaretPosition::new(to);
+    *self.basic.selection_range_mut() =
+      TextSelectionRange { anchor: TextPosition::new(from), focus: TextPosition::new(to) };
   }
 
   /// return the selection range of the text
@@ -95,9 +92,7 @@ impl TextArea {
   /// set the text and the caret selection will be reset to the start.
   pub fn set_text(&mut self, text: &str) {
     *self.basic.text_mut() = text.to_string().into();
-    let selection = &mut self.basic.selection;
-    selection.from = CaretPosition::default();
-    selection.to = CaretPosition::default();
+    *self.basic.selection_range_mut() = TextSelectionRange::default();
   }
 
   pub fn text(&self) -> &CowArc<str> { self.basic.text() }
@@ -105,9 +100,8 @@ impl TextArea {
   /// set the caret selection, and the caret position will be set to the `to`
   /// cluster
   pub fn select(&mut self, from: usize, to: usize) {
-    let selection = &mut self.basic.selection;
-    selection.from = CaretPosition::new(from);
-    selection.to = CaretPosition::new(to);
+    *self.basic.selection_range_mut() =
+      TextSelectionRange { anchor: TextPosition::new(from), focus: TextPosition::new(to) };
   }
 
   /// return the selection range of the text
@@ -179,15 +173,18 @@ impl Default for CaretPosition {
 
 impl Compose for Input {
   fn compose(this: impl StateWriter<Value = Self>) -> Widget<'static> {
-    focus_scope! {
-      skip_host: true,
-      @TextClamp {
-        rows: Some(1.),
-        cols: Some(20.),
-        class: INPUT,
-        @FatObj {
-          scrollable: Scrollable::X,
-          @part_writer!(&mut this.basic)
+    fn_widget! {
+      let basic = part_writer!(&mut this.basic);
+      focus_scope! {
+        skip_host: true,
+        @TextClamp {
+          rows: Some(1.),
+          cols: Some(20.),
+          class: INPUT,
+          @FatObj {
+            scrollable: Scrollable::X,
+            @ { basic }
+          }
         }
       }
     }
@@ -197,14 +194,17 @@ impl Compose for Input {
 
 impl Compose for TextArea {
   fn compose(this: impl StateWriter<Value = Self>) -> Widget<'static> {
-    focus_scope! {
-      @TextClamp {
-        rows: Some(2.),
-        cols: Some(20.),
-        class: TEXTAREA,
-        @Scrollbar {
-          text_overflow: TextOverflow::AutoWrap,
-          @part_writer!(&mut this.basic)
+    fn_widget! {
+      let basic = part_writer!(&mut this.basic);
+      focus_scope! {
+        @TextClamp {
+          rows: Some(2.),
+          cols: Some(20.),
+          class: TEXTAREA,
+          @Scrollbar {
+            text_overflow: TextOverflow::AutoWrap,
+            @ { basic }
+          }
         }
       }
     }
@@ -266,5 +266,33 @@ mod tests {
     wnd.process_receive_chars("hello".into());
     wnd.draw_frame();
     assert_eq!(*value.read(), "hello");
+  }
+
+  #[test]
+  fn input_double_tap_selects_word() {
+    reset_test_env!();
+
+    let input_state = Stateful::new(Input { basic: BasicEditor::default() });
+    input_state.write().set_text("hello world");
+    let input = input_state.clone_writer();
+
+    let w = fn_widget! {
+      @Container {
+        size: Size::new(200., 24.),
+        @ { input.clone_writer() }
+      }
+    };
+
+    let wnd = TestWindow::new_with_size(w, Size::new(200., 200.));
+    wnd.draw_frame();
+
+    for _ in 0..2 {
+      wnd.process_cursor_move(Point::new(18., 10.));
+      wnd.process_mouse_press(Box::new(DummyDeviceId), MouseButtons::PRIMARY);
+      wnd.process_mouse_release(Box::new(DummyDeviceId), MouseButtons::PRIMARY);
+      wnd.draw_frame();
+    }
+
+    assert_eq!(input_state.read().selection(), 0..5);
   }
 }
