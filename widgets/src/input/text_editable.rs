@@ -5,15 +5,15 @@ use ribir_core::prelude::{anchor::Anchor, *};
 use super::{
   edit_text::EditText,
   text_selectable::{
-    BoundaryResult, MoveMode, Selectable as LocalSelectable, SelectableWithContent, TEXT_SELECTION,
-    TextPosition, TextSelectable, TextSelection, TextSelectionRange, key_move_mode,
+    BoundaryResult, MoveMode, Selectable as LocalSelectable, SelectableWithContent, TextPosition,
+    TextSelectable, TextSelection, TextSelectionRange,
   },
 };
 use crate::{
   prelude::*,
   selectable_area::{
-    SelectionCoordinatorHandle, copy_selection_data_to_clipboard,
-    register_to_parent_selection_coordinator,
+    SelectableArea, SelectableAreaPosition, SelectableAreaSelection,
+    SelectableAreaSelectionChangedEvent, TextAreaData,
   },
 };
 
@@ -30,113 +30,78 @@ pub struct BasicEditor<T: 'static> {
   pre_edit: Option<PreEditState>,
 }
 
-impl<T: Default + VisualText + EditText + Clone + 'static> Compose for BasicEditor<T> {
+impl<T: Default + SyncLayoutVisualText + EditText + Clone + 'static> Compose for BasicEditor<T> {
   fn compose(this: impl StateWriter<Value = Self>) -> Widget<'static> {
-    let selectable = this.clone_writer();
-    let hosted_in_area = Provider::of::<SelectionCoordinatorHandle>(BuildCtx::get()).is_some();
-    let root = fn_widget! {
+    // let area_state = Stateful::new(SelectableArea::<TextPosition,
+    // TextAreaData>::default());
+    fn_widget! {
+      let mut area = @SelectableArea::<TextPosition, TextAreaData> {};
       let text_state = part_writer!(&mut this.host.text);
-      let selection_state = part_writer!(&mut this.selection);
-      let mut text = FatObj::new(text_state.clone_writer());
 
-      let caret = pipe!(*$read(text.is_focused()))
+      let text = part_writer!(&mut this.host);
+
+
+      let caret = pipe!(*$read(area.is_focused()))
         .transform(|p| p.distinct_until_changed())
         .map(move |v| v.then(|| fn_widget!{ Self::caret_widget($writer(this)) }));
 
-      let mut caret = FatObj::new(caret);
-        @Stack {
-          fit: StackFit::Passthrough,
+
+      @Stack {
+        fit: StackFit::Passthrough,
+        on_focus_in: move |e| {
+          e.window().set_ime_allowed(true);
+          $read(this).sync_selection_to_area(&mut $write(area));
+        },
+        on_focus_out: move |e| { e.window().set_ime_allowed(false); },
+        on_chars: move |e| {
+          let before = $read(this).snapshot();
+          let mut editor_state = $write(this);
+          if editor_state.chars_handle(e) {
+            editor_state.sync_selection_to_area(&mut $write(area));
+            editor_state.bubble_change_events(before, e, true);
+          } else {
+            editor_state.forget_modifies();
+          }
+        },
+        on_key_down: move |e| {
+          let before = $read(this).snapshot();
+          let mut editor_state = $write(this);
+          if editor_state.keys_handle(e) {
+            editor_state.sync_selection_to_area(&mut $write(area));
+            editor_state.bubble_change_events(before, e, true);
+          } else {
+            editor_state.forget_modifies();
+          }
+        },
+        on_ime_pre_edit: move |e| {
+          let before = $read(this).snapshot();
+          let mut editor_state = $write(this);
+          editor_state.process_pre_edit(e);
+          editor_state.sync_selection_to_area(&mut $write(area));
+          editor_state.bubble_change_events(before, e, true);
+        },
+        on_custom: move |e: &mut SelectableAreaSelectionChangedEvent<TextPosition>| {
+          let Some(selection) = e.data().to.as_ref() else {
+            return;
+          };
+          let from = $read(this).cluster_rg();
+          if $write(this).sync_selection_from_area(selection) {
+            let to = $read(this).cluster_rg();
+            e.window()
+              .bubble_custom_event(e.current_target(), TextSelectChanged { from, to });
+          }
+        },
+
+        @(area){ @ {text } }
+        @InParentLayout {
           @Providers {
             providers: [Provider::writer(text_state.clone_writer(), Some(DirtyPhase::Layout))],
-            @PointerSelectRegion {
-              on_custom: move |e: &mut PointerSelectEvent| {
-                let before = $read(this).snapshot();
-                if let PointerSelectData::Move { from, to } = e.data() {
-                  let new_sel = $read(this).selection_from_points(*from, *to);
-                  if let Some(new_sel) = new_sel  {
-                    $write(selection_state).range = new_sel;
-                  }
-                }
-                $read(this).bubble_change_events(before, e);
-              },
-              on_pointer_down: move |e| {
-                let before = $read(this).snapshot();
-                let pos = $read(this).position_from_point(e.position());
-                if let Some(pos) = pos {
-                  let mut selection = $write(selection_state);
-                  if e.with_shift_key() {
-                    selection.focus = pos;
-                } else {
-                    selection.range = TextSelectionRange::splat(pos);
-                  }
-                }
-                $read(this).bubble_change_events(before, e);
-              },
-              on_tap: move |e| {
-                let before = $read(this).snapshot();
-                let new_sel = $read(this).selection_from_points(e.position(), e.position());
-                if let Some(new_sel) = new_sel {
-                  $write(selection_state).range = new_sel;
-                }
-                $read(this).bubble_change_events(before, e);
-              },
-              on_double_tap: move |e| {
-                let before = $read(this).snapshot();
-                let new_sel = {
-                  let this = $read(this);
-                  this
-                    .position_from_point(e.position())
-                  .and_then(|pos| this.host.select_unit(&pos, MoveMode::Word))
-                };
-                if let Some(new_sel) = new_sel {
-                  $write(selection_state).range = new_sel;
-                }
-                $read(this).bubble_change_events(before, e);
-              },
-              @SelectionOverlay {
-                class: TEXT_SELECTION,
-                rects: pipe!(if hosted_in_area {
-                  Vec::new()
-                } else {
-                  $read(this).selection_rects()
-                }),
-                @(text) {
-                  margin: pipe!(EdgeInsets::only_right(*$read(caret.layout_width()))),
-                  on_focus_in: move |e| { e.window().set_ime_allowed(true); },
-                  on_focus_out: move |e| { e.window().set_ime_allowed(false); },
-                  on_chars: move |e| {
-                    let before = $read(this).snapshot();
-                    let mut this = $write(this);
-                    if this.chars_handle(e) {
-                      this.bubble_change_events(before, e);
-                    } else {
-                      this.forget_modifies();
-                    }
-                  },
-                  on_key_down: move |e| {
-                    let before = $read(this).snapshot();
-                    let mut this = $write(this);
-                    if this.selection_keys_handle(e) || this.keys_handle(e) {
-                      this.bubble_change_events(before, e);
-                    } else {
-                      this.forget_modifies();
-                    }
-                  },
-                  on_ime_pre_edit: move |e| {
-                    let before = $read(this).snapshot();
-                    let mut this = $write(this);
-                    this.process_pre_edit(e);
-                    this.bubble_change_events(before, e);
-                  },
-                }
-              }
-            }
+            @ { caret }
+          }
         }
-        @InParentLayout { @ { caret } }
       }
     }
-    .into_widget();
-    register_to_parent_selection_coordinator(root, selectable)
+    .into_widget()
   }
 }
 
@@ -148,9 +113,7 @@ impl<T> BasicEditor<T> {
   pub fn selection_range_mut(&mut self) -> &mut TextSelectionRange { &mut self.selection.range }
 }
 
-impl<T: EditText + 'static> BasicEditor<T> {
-  fn selection_rects(&self) -> Vec<Rect> { self.host.selection_rects(&self.selection.range) }
-
+impl<T: EditText + SyncLayoutVisualText + 'static> BasicEditor<T> {
   fn caret_widget(this: impl StateWriter<Value = Self>) -> Widget<'static> {
     let default_text_style = TextStyle::default();
     let fallback_caret_height = Provider::of::<TextStyle>(BuildCtx::get())
@@ -213,186 +176,93 @@ impl<T: EditText + 'static> BasicEditor<T> {
   }
 
   fn caret_box(&self) -> Rect {
-    self
-      .host
-      .caret_rect(&self.selection.focus)
-      .unwrap_or_default()
+    LocalSelectable::caret_rect(&self.host, &self.selection.focus).unwrap_or_default()
   }
 
-  fn position_from_point(&self, point: Point) -> Option<TextPosition> {
-    self
-      .host
-      .hit_test(point)
-      .or_else(|| self.host.nearest_position(point))
-  }
-
-  fn selection_from_points(&self, anchor: Point, focus: Point) -> Option<TextSelectionRange> {
-    let anchor = self.position_from_point(anchor)?;
-    let focus = self.position_from_point(focus)?;
-    Some(self.host.make_range(anchor, focus))
-  }
-
-  fn resolve_boundary_position(
-    &self, current: TextPosition, moved: BoundaryResult<TextPosition>,
-  ) -> Option<TextPosition> {
-    match moved {
-      BoundaryResult::InBlock(pos) => Some(pos),
-      BoundaryResult::AtStart => self.host.first_position().or(Some(current)),
-      BoundaryResult::AtEnd => self.host.last_position().or(Some(current)),
-      BoundaryResult::AtTop | BoundaryResult::AtBottom => Some(current),
-      BoundaryResult::Unavailable => None,
+  fn sync_selection_from_area(
+    &mut self, selection: &SelectableAreaSelection<TextPosition>,
+  ) -> bool {
+    if selection.anchor.idx != 0 || selection.focus.idx != 0 {
+      return false;
+    }
+    let selection =
+      TextSelectionRange { anchor: selection.anchor.position, focus: selection.focus.position };
+    if self.selection.range == selection {
+      false
+    } else {
+      self.selection.range = selection;
+      true
     }
   }
 
-  fn selection_keys_handle(&mut self, event: &KeyboardEvent) -> bool {
-    match self.selection_action(event) {
-      Ok(Some(selection)) => {
-        self.selection.range = selection;
-        true
-      }
-      Ok(None) => true,
-      Err(()) => false,
-    }
-  }
-
-  fn selection_action(&self, event: &KeyboardEvent) -> Result<Option<TextSelectionRange>, ()> {
-    if let Ok(selection) = self.selection_command(event) {
-      return Ok(selection);
-    }
-
-    let current = self.selection.focus;
-    let next = match event.key() {
-      VirtualKey::Named(NamedKey::ArrowLeft) => self.resolve_boundary_position(
-        current,
-        self
-          .host
-          .move_left(&current, key_move_mode(event)),
-      ),
-      VirtualKey::Named(NamedKey::ArrowRight) => self.resolve_boundary_position(
-        current,
-        self
-          .host
-          .move_right(&current, key_move_mode(event)),
-      ),
-      VirtualKey::Named(NamedKey::ArrowUp) => {
-        self.resolve_boundary_position(current, self.host.move_up(&current))
-      }
-      VirtualKey::Named(NamedKey::ArrowDown) => {
-        self.resolve_boundary_position(current, self.host.move_down(&current))
-      }
-      VirtualKey::Named(NamedKey::Home) => self.resolve_boundary_position(
-        current,
-        self
-          .host
-          .move_left(&current, MoveMode::LineBoundary),
-      ),
-      VirtualKey::Named(NamedKey::End) => self.resolve_boundary_position(
-        current,
-        self
-          .host
-          .move_right(&current, MoveMode::LineBoundary),
-      ),
-      _ => return Err(()),
-    };
-
-    let Some(next) = next else {
-      return Ok(None);
-    };
-    let anchor = if event.with_shift_key() { self.selection.anchor } else { next };
-    Ok(Some(self.host.make_range(anchor, next)))
-  }
-
-  fn selection_command(&self, event: &KeyboardEvent) -> Result<Option<TextSelectionRange>, ()> {
-    if !event.with_command_key() {
-      return Err(());
-    }
-
-    if *event.key_code() == PhysicalKey::Code(KeyCode::KeyC)
-      && let Some(scope) = Provider::of::<SelectionCoordinatorHandle>(event)
-    {
-      let selection = scope.selection_data();
-      if !selection.is_empty() {
-        let _ = copy_selection_data_to_clipboard(selection.as_slice());
-        return Ok(None);
-      }
-    }
-
-    match event.key_code() {
-      PhysicalKey::Code(KeyCode::KeyC) => {
-        let text = self.substr(self.cluster_rg());
-        if !text.is_empty() {
-          let clipboard = AppCtx::clipboard();
-          let _ = clipboard.borrow_mut().clear();
-          let _ = clipboard.borrow_mut().write_text(&text);
-        }
-        Ok(None)
-      }
-      PhysicalKey::Code(KeyCode::KeyA) => {
-        let Some(anchor) = self.host.first_position() else {
-          return Ok(None);
-        };
-        let Some(focus) = self.host.last_position() else {
-          return Ok(None);
-        };
-        if anchor == focus { Ok(None) } else { Ok(Some(self.host.make_range(anchor, focus))) }
-      }
-      _ => Err(()),
-    }
+  fn sync_selection_to_area(&self, area: &mut SelectableArea<TextPosition, TextAreaData>) {
+    area.set_selection(Some(SelectableAreaSelection {
+      anchor: SelectableAreaPosition { idx: 0, position: self.selection.anchor },
+      focus: SelectableAreaPosition { idx: 0, position: self.selection.focus },
+    }));
   }
 }
 
-impl<T: EditText + 'static> LocalSelectable for BasicEditor<T> {
+impl<T: EditText + SyncLayoutVisualText + 'static> LocalSelectable for BasicEditor<T> {
   type Position = TextPosition;
   type Range = TextSelectionRange;
 
-  fn hit_test(&self, point: Point) -> Option<Self::Position> { self.host.hit_test(point) }
-
-  fn nearest_position(&self, point: Point) -> Option<Self::Position> {
-    self.host.nearest_position(point)
+  fn hit_test(&self, point: Point) -> Option<Self::Position> {
+    LocalSelectable::hit_test(&self.host, point)
   }
 
-  fn first_position(&self) -> Option<Self::Position> { self.host.first_position() }
+  fn nearest_position(&self, point: Point) -> Option<Self::Position> {
+    LocalSelectable::nearest_position(&self.host, point)
+  }
 
-  fn last_position(&self) -> Option<Self::Position> { self.host.last_position() }
+  fn first_position(&self) -> Option<Self::Position> { LocalSelectable::first_position(&self.host) }
+
+  fn last_position(&self) -> Option<Self::Position> { LocalSelectable::last_position(&self.host) }
 
   fn move_left(&self, pos: &Self::Position, mode: MoveMode) -> BoundaryResult<Self::Position> {
-    self.host.move_left(pos, mode)
+    LocalSelectable::move_left(&self.host, pos, mode)
   }
 
   fn move_right(&self, pos: &Self::Position, mode: MoveMode) -> BoundaryResult<Self::Position> {
-    self.host.move_right(pos, mode)
+    LocalSelectable::move_right(&self.host, pos, mode)
   }
 
   fn move_up(&self, pos: &Self::Position) -> BoundaryResult<Self::Position> {
-    self.host.move_up(pos)
+    LocalSelectable::move_up(&self.host, pos)
   }
 
   fn move_down(&self, pos: &Self::Position) -> BoundaryResult<Self::Position> {
-    self.host.move_down(pos)
+    LocalSelectable::move_down(&self.host, pos)
   }
 
   fn make_range(&self, anchor: Self::Position, focus: Self::Position) -> Self::Range {
-    self.host.make_range(anchor, focus)
+    LocalSelectable::make_range(&self.host, anchor, focus)
   }
 
-  fn is_collapsed(&self, range: &Self::Range) -> bool { self.host.is_collapsed(range) }
+  fn is_collapsed(&self, range: &Self::Range) -> bool {
+    LocalSelectable::is_collapsed(&self.host, range)
+  }
 
-  fn caret_rect(&self, pos: &Self::Position) -> Option<Rect> { self.host.caret_rect(pos) }
+  fn caret_rect(&self, pos: &Self::Position) -> Option<Rect> {
+    LocalSelectable::caret_rect(&self.host, pos)
+  }
 
-  fn selection_rects(&self, range: &Self::Range) -> Vec<Rect> { self.host.selection_rects(range) }
+  fn selection_rects(&self, range: &Self::Range) -> Vec<Rect> {
+    LocalSelectable::selection_rects(&self.host, range)
+  }
 
   fn select_unit(&self, pos: &Self::Position, mode: MoveMode) -> Option<Self::Range> {
-    self.host.select_unit(pos, mode)
+    LocalSelectable::select_unit(&self.host, pos, mode)
   }
 }
 
-impl<T: EditText + 'static> SelectableWithContent for BasicEditor<T> {
+impl<T: EditText + SyncLayoutVisualText + 'static> SelectableWithContent for BasicEditor<T> {
   fn selection_text(&self, range: &TextSelectionRange) -> String {
     self.substr(range.cluster_rg()).to_string()
   }
 }
 
-impl<T: EditText + 'static> BasicEditor<T> {
+impl<T: EditText + SyncLayoutVisualText + 'static> BasicEditor<T> {
   fn chars_handle(&mut self, event: &CharsEvent) -> bool {
     if event.common.with_command_key() {
       return false;
@@ -497,6 +367,7 @@ impl<T: EditText + 'static> BasicEditor<T> {
 
   fn bubble_change_events(
     &self, before: EditorSnapshot, e: &impl std::ops::Deref<Target = CommonEvent>,
+    emit_selection_change: bool,
   ) {
     let after = self.snapshot();
     let EditorSnapshot { text: from_text, selection: from_selection } = before;
@@ -508,7 +379,7 @@ impl<T: EditText + 'static> BasicEditor<T> {
       );
     }
 
-    if from_selection != after.selection {
+    if emit_selection_change && from_selection != after.selection {
       e.window().bubble_custom_event(
         e.current_target(),
         TextSelectChanged { from: from_selection, to: after.selection },

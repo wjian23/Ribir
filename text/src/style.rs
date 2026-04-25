@@ -108,6 +108,8 @@ pub struct SpanStyle<Brush> {
   pub letter_spacing: Option<f32>,
   pub line_height: Option<LineHeight>,
   pub brush: Option<Brush>,
+  pub background_brush: Option<Brush>,
+  pub background_radius: Option<f32>,
   pub decoration: Option<TextDecorationStyle>,
 }
 
@@ -209,6 +211,8 @@ pub fn single_style_span_style<Brush>(
     letter_spacing: Some(text_style.letter_space),
     line_height: None,
     brush: None,
+    background_brush: None,
+    background_radius: None,
     decoration,
   }
 }

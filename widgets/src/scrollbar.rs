@@ -70,6 +70,7 @@ impl Declare for Scrollbar {
 
 impl ObjDeclarer for ScrollbarDeclarer {
   type Target = FatObj<Scrollbar>;
+
   fn finish(mut self) -> Self::Target {
     let scroll = self
       .0
@@ -97,24 +98,34 @@ impl<'c> ComposeChild<'c> for Scrollbar {
               clamp: BoxClamp::EXPAND_X,
               on_wheel: move |e| $write(scroll).scroll(-e.delta_x, -e.delta_y),
             };
-            let h_track_width = h_track.layout_width();
             let mut h_thumb =  @Container {
               class: H_SCROLL_THUMB,
               hint_width: distinct_pipe!{
-                let track_width = *$read(h_track_width);
-                h_thumb_rate(&$read(scroll)) * track_width
+                h_thumb_rate(&$read(scroll)) * $read(scroll).scroll_view_size().width
               },
               hint_height: 4.,
             };
             let h_thumb_width = h_thumb.layout_width();
 
-            @PointerSelectRegion {
+
+              @(h_track) {
+                on_tap: move |e| if e.is_primary {
+                  let track_width = $read(scroll).scroll_view_size().width;
+                  let rate = if track_width > 0. { e.position().x / track_width } else { 0. };
+                  let mut scroll = $write(scroll);
+                  let x = rate * scroll.max_scrollable().x;
+                  let scroll_pos = Point::new(x, scroll.get_scroll_pos().y);
+                  scroll.jump_to(scroll_pos);
+                },
+                @PointerSelectRegion {
               on_custom: move |e: &mut PointerSelectEvent| {
-                let track_width = *$read(h_track_width);
+                let track_width = $read(scroll).scroll_view_size().width;
                 let thumb_width = *$read(h_thumb_width);
 
                 match e.data() {
                   PointerSelectData::Start(point) => {
+                    let point = e.map_to_local(*point);
+                    let point =e.map_to_parent(point);
                     *$write(h_drag_anchor) = thumb_drag_anchor(
                       track_width,
                       thumb_width,
@@ -124,6 +135,8 @@ impl<'c> ComposeChild<'c> for Scrollbar {
                   }
                   PointerSelectData::Move { to, .. } => {
                     if let Some(anchor) = *$read(h_drag_anchor) {
+                      let to = e.map_to_local(*to);
+                      let to =e.map_to_parent(to);
                       drag_horizontal_thumb(
                         &mut $write(scroll),
                         track_width,
@@ -135,6 +148,8 @@ impl<'c> ComposeChild<'c> for Scrollbar {
                   }
                   PointerSelectData::End { to, .. } => {
                     if let Some(anchor) = $write(h_drag_anchor).take() {
+                      let to = e.map_to_local(*to);
+                      let to =e.map_to_parent(to);
                       drag_horizontal_thumb(
                         &mut $write(scroll),
                         track_width,
@@ -145,22 +160,17 @@ impl<'c> ComposeChild<'c> for Scrollbar {
                     }
                   }
                 }
+                e.stop_propagation();
               },
-              @(h_track) {
-                on_tap: move |e| if e.is_primary {
-                  let rate = e.position().x / *$read(h_track_width);
-                  let mut scroll = $write(scroll);
-                  let x = rate * scroll.max_scrollable().x;
-                  let scroll_pos = Point::new(x, scroll.get_scroll_pos().y);
-                  scroll.jump_to(scroll_pos);
-                },
-                @(h_thumb) {
-                  x: distinct_pipe!{
-                    let rate = $read(scroll).get_x_scroll_rate();
-                    let track_width = *$read(h_track_width);
-                    let thumb_width = *$read(h_thumb_width);
-                    thumb_offset(rate, track_width, thumb_width)
-                  }
+                @CustomAnchor {
+                  data: distinct_pipe! {
+                    ThumbAnchorData {
+                      scroll_rate: $read(scroll).get_x_scroll_rate(),
+                      track_extent: $read(scroll).scroll_view_size().width,
+                    }
+                  },
+                  anchor: horizontal_thumb_anchor,
+                  @(h_thumb) {}
                 }
               }
             }
@@ -174,74 +184,83 @@ impl<'c> ComposeChild<'c> for Scrollbar {
               clamp: BoxClamp::EXPAND_Y,
               on_wheel: move |e| $write(scroll).scroll(-e.delta_x, -e.delta_y),
             };
-            let v_track_height = v_track.layout_height();
 
             let mut v_thumb = @Container {
               class: V_SCROLL_THUMB,
               hint_width: 4.,
               hint_height: distinct_pipe!{
-                let track_height = *$read(v_track_height);
-                v_thumb_rate(&$read(scroll)) * track_height
+                v_thumb_rate(&$read(scroll)) * $read(scroll).scroll_view_size().height
               },
             };
             let v_thumb_height = v_thumb.layout_height();
 
-            @PointerSelectRegion {
-              on_custom: move |e: &mut PointerSelectEvent| {
-                let track_height = *$read(v_track_height);
-                let thumb_height = *$read(v_thumb_height);
 
-                match e.data() {
-                  PointerSelectData::Start(point) => {
-                    *$write(v_drag_anchor) = thumb_drag_anchor(
-                      track_height,
-                      thumb_height,
-                      point.y,
-                      $read(scroll).get_y_scroll_rate(),
-                    );
-                  }
-                  PointerSelectData::Move { to, .. } => {
-                    if let Some(anchor) = *$read(v_drag_anchor) {
-                      drag_vertical_thumb(
-                        &mut $write(scroll),
-                        track_height,
-                        thumb_height,
-                        to.y,
-                        anchor,
-                      );
-                    }
-                  }
-                  PointerSelectData::End { to, .. } => {
-                    if let Some(anchor) = $write(v_drag_anchor).take() {
-                      drag_vertical_thumb(
-                        &mut $write(scroll),
-                        track_height,
-                        thumb_height,
-                        to.y,
-                        anchor,
-                      );
-                    }
-                  }
-                }
+            @(v_track) {
+              on_tap: move |e| if e.is_primary {
+                let track_height = $read(scroll).scroll_view_size().height;
+                let rate = if track_height > 0. { e.position().y / track_height } else { 0. };
+                let mut scroll = $write(scroll);
+                let y = rate * scroll.max_scrollable().y;
+                let scroll_pos = Point::new(scroll.get_scroll_pos().x, y);
+                scroll.jump_to(scroll_pos);
               },
-              @(v_track) {
-                on_tap: move |e| if e.is_primary {
-                  let rate = e.position().y / *$read(v_track_height);
-                  let mut scroll = $write(scroll);
-                  let y = rate * scroll.max_scrollable().y;
-                  let scroll_pos = Point::new(scroll.get_scroll_pos().x, y);
-                  scroll.jump_to(scroll_pos);
-                },
-                @(v_thumb) {
-                  y: distinct_pipe!{
-                    let rate = $read(scroll).get_y_scroll_rate();
-                    let track_height = *$read(v_track_height);
-                    let thumb_height = *$read(v_thumb_height);
-                    thumb_offset(rate, track_height, thumb_height)
+              @PointerSelectRegion {
+                on_custom: move |e: &mut PointerSelectEvent| {
+                  let track_height = $read(scroll).scroll_view_size().height;
+                  let thumb_height = *$read(v_thumb_height);
+
+                  match e.data() {
+                    PointerSelectData::Start(point) => {
+                      let point = e.map_to_local(*point);
+                      let point =e.map_to_parent(point);
+                      *$write(v_drag_anchor) = thumb_drag_anchor(
+                        track_height,
+                        thumb_height,
+                        point.y,
+                        $read(scroll).get_y_scroll_rate(),
+                      );
+                    }
+                    PointerSelectData::Move { to, .. } => {
+                      if let Some(anchor) = *$read(v_drag_anchor) {
+                        let to = e.map_to_local(*to);
+                        let to =e.map_to_parent(to);
+                        drag_vertical_thumb(
+                          &mut $write(scroll),
+                          track_height,
+                          thumb_height,
+                          to.y,
+                          anchor,
+                        );
+                      }
+                    }
+                    PointerSelectData::End { to, .. } => {
+                      if let Some(anchor) = $write(v_drag_anchor).take() {
+                        let to = e.map_to_local(*to);
+                        let to =e.map_to_parent(to);
+                        drag_vertical_thumb(
+                          &mut $write(scroll),
+                          track_height,
+                          thumb_height,
+                          to.y,
+                          anchor,
+                        );
+                      }
+                    }
                   }
+                },
+                @CustomAnchor {
+                  data: distinct_pipe! {
+                    ThumbAnchorData {
+                      scroll_rate: $read(scroll).get_y_scroll_rate(),
+                      track_extent: $read(scroll).scroll_view_size().height,
+                    }
+                  },
+                  anchor: vertical_thumb_anchor,
+                  @(v_thumb) {}
                 }
-              }
             }
+          }
+
           }));
 
         let mut scroll = FatObj::new(scroll);
@@ -260,6 +279,12 @@ impl<'c> ComposeChild<'c> for Scrollbar {
   }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ThumbAnchorData {
+  scroll_rate: f32,
+  track_extent: f32,
+}
+
 fn h_thumb_rate(s: &ScrollableWidget) -> f32 {
   s.scroll_view_size().width / s.scroll_content_size().width
 }
@@ -269,6 +294,22 @@ fn v_thumb_rate(s: &ScrollableWidget) -> f32 {
 
 fn thumb_offset(scroll_rate: f32, track_extent: f32, thumb_extent: f32) -> f32 {
   scroll_rate * (track_extent - thumb_extent).max(0.)
+}
+
+fn thumb_anchor_offset(data: &ThumbAnchorData, thumb_extent: f32) -> f32 {
+  thumb_offset(data.scroll_rate, data.track_extent, thumb_extent)
+}
+
+fn horizontal_thumb_anchor(
+  data: &ThumbAnchorData, child_size: Size, _clamp: BoxClamp, _ctx: &mut PlaceCtx,
+) -> Anchor {
+  Anchor::left_top(thumb_anchor_offset(data, child_size.width), 0.)
+}
+
+fn vertical_thumb_anchor(
+  data: &ThumbAnchorData, child_size: Size, _clamp: BoxClamp, _ctx: &mut PlaceCtx,
+) -> Anchor {
+  Anchor::left_top(0., thumb_anchor_offset(data, child_size.height))
 }
 
 fn thumb_drag_anchor(
@@ -386,5 +427,12 @@ mod test {
     let anchor = thumb_drag_anchor(100., 20., 10., 0.).unwrap();
     drag_vertical_thumb(&mut scroll.write(), 100., 20., 70., anchor);
     assert_eq!(scroll_reader.read().get_scroll_pos().y, 300.);
+  }
+
+  #[test]
+  fn thumb_anchor_uses_actual_child_extent() {
+    let data = ThumbAnchorData { scroll_rate: 1., track_extent: 100. };
+    assert_eq!(thumb_anchor_offset(&data, 12.), 88.);
+    assert_eq!(thumb_anchor_offset(&data, 20.), 80.);
   }
 }

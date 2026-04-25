@@ -4,8 +4,8 @@ use std::{
 };
 
 use parley::{
-  FontContext as ParleyFontContext, FontData as ParleyFontData, Layout as ParleyLayout,
-  LayoutContext as ParleyLayoutContext,
+  FontContext as ParleyFontContext, FontData as ParleyFontData, InlineBox as ParleyInlineBox,
+  Layout as ParleyLayout, LayoutContext as ParleyLayoutContext,
   editing::{Cursor as ParleyCursor, Selection as ParleySelection},
   fontique::{Blob, CollectionOptions},
   layout::{Affinity as ParleyAffinity, BreakReason, PositionedLayoutItem},
@@ -23,10 +23,14 @@ use swash::FontRef;
 use crate::{
   AttributedText, FontSystem,
   font::{FontFaceId, FontFaceMetrics, FontFamily, FontLoadError, FontStretch, FontStyle},
-  paint::{DrawGlyph, DrawGlyphRun, DrawTextDecoration, GlyphId, TextDrawPayload},
+  paint::{
+    DrawGlyph, DrawGlyphRun, DrawInlineBox, DrawTextBackground, DrawTextDecoration, GlyphId,
+    TextDrawPayload,
+  },
   paragraph::{
     Caret, CaretAffinity, CaretMotion, ClusterIndex, LineIndex, Paragraph, ParagraphLayout,
-    ParagraphLayoutRef, TextByteIndex, TextHitResult, TextRange, TextSpan, VisualPosition,
+    ParagraphLayoutRef, TextByteIndex, TextHitResult, TextInlineBox, TextRange, TextSpan,
+    VisualPosition,
   },
   raster::{GlyphRasterSource, GlyphRasterSourceRef, RasterBitmap, RasterBitmapFormat},
   style::{Color, LineHeight, ParagraphStyle, TextAlign, TextDecoration, TextStyle, TextWrap},
@@ -181,6 +185,7 @@ impl ParleyEngine {
     for span in source.spans.iter() {
       push_span_styles(&mut builder, span, text_style, paragraph_style, &mut brushes);
     }
+    push_inline_boxes(&mut builder, source.inline_boxes.iter());
 
     let layout = builder.build(text);
     let widths = layout.calculate_content_widths();
@@ -205,6 +210,7 @@ impl ParleyEngine {
     for span in source.spans.iter() {
       push_span_styles(&mut builder, span, text_style, paragraph_style, &mut brushes);
     }
+    push_inline_boxes(&mut builder, source.inline_boxes.iter());
 
     let mut layout = builder.build(text);
     let wrap_width = match paragraph_style.wrap {
@@ -214,7 +220,7 @@ impl ParleyEngine {
     layout.break_all_lines(wrap_width);
 
     let layout = Arc::new(layout);
-    let payload = Self::build_payload(layout.as_ref(), faces, &brushes);
+    let payload = Self::build_payload(layout.as_ref(), source, faces, &brushes);
     let logical_size = payload.bounds.size;
     let line_offsets = vec![0.; layout.len()].into_boxed_slice();
 
@@ -229,143 +235,178 @@ impl ParleyEngine {
   }
 
   fn build_payload<Brush>(
-    layout: &ParleyLayout<usize>, faces: &ParleyFaces, brushes: &[Option<Brush>],
+    layout: &ParleyLayout<usize>, source: &AttributedText<Brush>, faces: &ParleyFaces,
+    brushes: &[Option<Brush>],
   ) -> TextDrawPayload<Brush>
   where
     Brush: Clone + PartialEq + 'static,
   {
+    let mut backgrounds = build_backgrounds(layout, source);
     let mut runs = Vec::new();
+    let mut inline_boxes = Vec::new();
     let mut decorations = Vec::new();
     let mut bounds = Rect::from_size(Size::new(layout.full_width(), layout.height()));
+    for background in backgrounds.iter() {
+      bounds = bounds.union(&background.rect);
+    }
 
-    for line in layout.lines() {
+    for (line_index, line) in layout.lines().enumerate() {
       for item in line.items() {
-        let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
-          continue;
-        };
-        let run = glyph_run.run();
-        let font = run.font();
-        let font_size = run.font_size();
-        let (face_id, metrics) = Self::register_face(font, faces);
-        let baseline_shift = baseline_shift(Some(metrics), font_size);
-        let scale = font_metrics_scale(metrics, font_size);
-        let ascender = metrics.ascender * scale;
-        let descender = metrics.descender * scale;
+        match item {
+          PositionedLayoutItem::GlyphRun(glyph_run) => {
+            let run = glyph_run.run();
+            let font = run.font();
+            let font_size = run.font_size();
+            let (face_id, metrics) = Self::register_face(font, faces);
+            let baseline_shift = baseline_shift(Some(metrics), font_size);
+            let scale = font_metrics_scale(metrics, font_size);
+            let ascender = metrics.ascender * scale;
+            let descender = metrics.descender * scale;
 
-        let mut pen_x = glyph_run.offset();
-        let baseline_y = glyph_run.baseline() + baseline_shift;
-        let mut run_bounds: Option<Rect> = None;
-        let glyphs = glyph_run
-          .glyphs()
-          .map(|glyph| {
-            let draw = DrawGlyph {
-              glyph_id: GlyphId(glyph.id as u16),
-              cluster: ClusterIndex(run.text_range().start),
-              baseline_origin: Point::new(pen_x + glyph.x, baseline_y + glyph.y),
-              advance: Vector::new(glyph.advance, 0.),
-            };
-            run_bounds = Some(union_optional_rect(
-              run_bounds,
-              glyph_metrics_rect(draw.baseline_origin, glyph.advance, ascender, descender),
-            ));
-            pen_x += glyph.advance;
-            draw
-          })
-          .collect::<Vec<_>>()
-          .into_boxed_slice();
+            let mut pen_x = glyph_run.offset();
+            let baseline_y = glyph_run.baseline() + baseline_shift;
+            let mut run_bounds: Option<Rect> = None;
+            let glyphs = glyph_run
+              .glyphs()
+              .map(|glyph| {
+                let draw = DrawGlyph {
+                  glyph_id: GlyphId(glyph.id as u16),
+                  cluster: ClusterIndex(run.text_range().start),
+                  baseline_origin: Point::new(pen_x + glyph.x, baseline_y + glyph.y),
+                  advance: Vector::new(glyph.advance, 0.),
+                };
+                run_bounds = Some(union_optional_rect(
+                  run_bounds,
+                  glyph_metrics_rect(draw.baseline_origin, glyph.advance, ascender, descender),
+                ));
+                pen_x += glyph.advance;
+                draw
+              })
+              .collect::<Vec<_>>()
+              .into_boxed_slice();
 
-        if let Some(run_bounds) = run_bounds {
-          bounds = bounds.union(&run_bounds);
-        }
-        if let Some(first) = glyphs.first() {
-          union_edge_glyph_rect(
-            &mut bounds,
-            font,
-            first.glyph_id,
-            font_size,
-            first.baseline_origin,
-          );
-        }
-        if glyphs.len() > 1
-          && let Some(last) = glyphs.last()
-        {
-          union_edge_glyph_rect(&mut bounds, font, last.glyph_id, font_size, last.baseline_origin);
-        }
+            if let Some(run_bounds) = run_bounds {
+              bounds = bounds.union(&run_bounds);
+            }
+            if let Some(first) = glyphs.first() {
+              union_edge_glyph_rect(
+                &mut bounds,
+                font,
+                first.glyph_id,
+                font_size,
+                first.baseline_origin,
+              );
+            }
+            if glyphs.len() > 1
+              && let Some(last) = glyphs.last()
+            {
+              union_edge_glyph_rect(
+                &mut bounds,
+                font,
+                last.glyph_id,
+                font_size,
+                last.baseline_origin,
+              );
+            }
 
-        let underline = glyph_run.style().underline.as_ref();
-        let throughline = glyph_run.style().strikethrough.as_ref();
-        if underline.is_some() || throughline.is_some() {
-          let default_brush = brushes
-            .get(glyph_run.style().brush)
-            .cloned()
-            .flatten();
-          let has_overline = underline.is_some_and(|decoration| decoration.offset == Some(0.));
-          let has_underline =
-            underline.is_some_and(|decoration| decoration.size.is_none_or(|size| size > 0.));
+            let underline = glyph_run.style().underline.as_ref();
+            let throughline = glyph_run.style().strikethrough.as_ref();
+            if underline.is_some() || throughline.is_some() {
+              let default_brush = brushes
+                .get(glyph_run.style().brush)
+                .cloned()
+                .flatten();
+              let has_overline = underline.is_some_and(|decoration| decoration.offset == Some(0.));
+              let has_underline =
+                underline.is_some_and(|decoration| decoration.size.is_none_or(|size| size > 0.));
 
-          if has_underline
-            && let Some(rect) = push_decoration_rect(
-              &mut decorations,
-              TextDecoration::UNDERLINE,
-              &underline
-                .and_then(|decoration| brushes.get(decoration.brush).cloned().flatten())
-                .or(default_brush.clone()),
-              glyph_run.offset(),
-              baseline_y
-                - underline_offset(metrics, scale, decoration_thickness(metrics, scale, font_size)),
-              glyph_run.advance(),
-              decoration_thickness(metrics, scale, font_size),
-            )
-          {
-            bounds = bounds.union(&rect);
+              if has_underline
+                && let Some(rect) = push_decoration_rect(
+                  &mut decorations,
+                  TextDecoration::UNDERLINE,
+                  &underline
+                    .and_then(|decoration| brushes.get(decoration.brush).cloned().flatten())
+                    .or(default_brush.clone()),
+                  glyph_run.offset(),
+                  baseline_y
+                    - underline_offset(
+                      metrics,
+                      scale,
+                      decoration_thickness(metrics, scale, font_size),
+                    ),
+                  glyph_run.advance(),
+                  decoration_thickness(metrics, scale, font_size),
+                )
+              {
+                bounds = bounds.union(&rect);
+              }
+              if has_overline
+                && let Some(rect) = push_decoration_rect(
+                  &mut decorations,
+                  TextDecoration::OVERLINE,
+                  &underline
+                    .and_then(|decoration| brushes.get(decoration.brush).cloned().flatten())
+                    .or(default_brush.clone()),
+                  glyph_run.offset(),
+                  baseline_y - overline_offset(metrics, scale),
+                  glyph_run.advance(),
+                  decoration_thickness(metrics, scale, font_size),
+                )
+              {
+                bounds = bounds.union(&rect);
+              }
+              if throughline.is_some()
+                && let Some(rect) = push_decoration_rect(
+                  &mut decorations,
+                  TextDecoration::THROUGHLINE,
+                  &throughline
+                    .and_then(|decoration| brushes.get(decoration.brush).cloned().flatten())
+                    .or(default_brush),
+                  glyph_run.offset(),
+                  baseline_y - strikeout_offset(metrics, scale),
+                  glyph_run.advance(),
+                  decoration_thickness(metrics, scale, font_size),
+                )
+              {
+                bounds = bounds.union(&rect);
+              }
+            }
+
+            runs.push(DrawGlyphRun {
+              face_id,
+              logical_font_size: font_size,
+              brush: brushes
+                .get(glyph_run.style().brush)
+                .cloned()
+                .flatten(),
+              glyphs,
+            });
           }
-          if has_overline
-            && let Some(rect) = push_decoration_rect(
-              &mut decorations,
-              TextDecoration::OVERLINE,
-              &underline
-                .and_then(|decoration| brushes.get(decoration.brush).cloned().flatten())
-                .or(default_brush.clone()),
-              glyph_run.offset(),
-              baseline_y - overline_offset(metrics, scale),
-              glyph_run.advance(),
-              decoration_thickness(metrics, scale, font_size),
-            )
-          {
+          PositionedLayoutItem::InlineBox(inline_box) => {
+            let rect = Rect::new(
+              Point::new(inline_box.x, inline_box.y),
+              Size::new(inline_box.width, inline_box.height),
+            );
             bounds = bounds.union(&rect);
-          }
-          if throughline.is_some()
-            && let Some(rect) = push_decoration_rect(
-              &mut decorations,
-              TextDecoration::THROUGHLINE,
-              &throughline
-                .and_then(|decoration| brushes.get(decoration.brush).cloned().flatten())
-                .or(default_brush),
-              glyph_run.offset(),
-              baseline_y - strikeout_offset(metrics, scale),
-              glyph_run.advance(),
-              decoration_thickness(metrics, scale, font_size),
-            )
-          {
-            bounds = bounds.union(&rect);
+            inline_boxes.push(DrawInlineBox {
+              line: LineIndex(line_index),
+              id: inline_box.id,
+              rect,
+            });
           }
         }
-
-        runs.push(DrawGlyphRun {
-          face_id,
-          logical_font_size: font_size,
-          brush: brushes
-            .get(glyph_run.style().brush)
-            .cloned()
-            .flatten(),
-          glyphs,
-        });
       }
     }
 
     let shift = Vector::new((-bounds.min_x()).max(0.), (-bounds.min_y()).max(0.));
     if shift != Vector::zero() {
       bounds = bounds.translate(shift);
+      backgrounds
+        .iter_mut()
+        .for_each(|background| background.rect = background.rect.translate(shift));
+      inline_boxes
+        .iter_mut()
+        .for_each(|inline_box| inline_box.rect = inline_box.rect.translate(shift));
       decorations
         .iter_mut()
         .for_each(|decoration| decoration.rect = decoration.rect.translate(shift));
@@ -374,7 +415,9 @@ impl ParleyEngine {
     TextDrawPayload {
       bounds,
       origin_offset: shift,
+      backgrounds: backgrounds.into_boxed_slice(),
       runs: runs.into_boxed_slice(),
+      inline_boxes: inline_boxes.into_boxed_slice(),
       decorations: decorations.into_boxed_slice(),
     }
   }
@@ -438,6 +481,20 @@ fn push_layout_defaults(
     }));
   }
   builder.push_default(StyleProperty::LineHeight(parley_line_height(text_style.line_height)));
+}
+
+fn push_inline_boxes<'a>(
+  builder: &mut parley::RangedBuilder<'_, usize>,
+  inline_boxes: impl IntoIterator<Item = &'a TextInlineBox>,
+) {
+  for inline_box in inline_boxes {
+    builder.push_inline_box(ParleyInlineBox {
+      id: inline_box.id,
+      index: inline_box.index.0,
+      width: inline_box.width,
+      height: inline_box.height,
+    });
+  }
 }
 
 impl<Brush> Paragraph<Brush> for ParleyParagraph<Brush>
@@ -515,17 +572,9 @@ where
   }
 
   fn selection_rects(&self, selection: TextRange) -> Box<[Rect]> {
-    let start =
-      ParleyCursor::from_byte_index(&self.layout, selection.start.0, ParleyAffinity::Downstream);
-    let end =
-      ParleyCursor::from_byte_index(&self.layout, selection.end.0, ParleyAffinity::Upstream);
-    ParleySelection::new(start, end)
-      .geometry(&self.layout)
+    layout_selection_rects(&self.layout, selection, self.payload.origin_offset, &self.line_offsets)
       .into_iter()
-      .map(|(rect, _)| {
-        let rect = rect_from_box(rect).translate(self.payload.origin_offset);
-        rect.translate(Vector::new(self.line_x_offset(self.line_index_for_y(rect.center().y)), 0.))
-      })
+      .map(|(_, rect)| rect)
       .collect::<Vec<_>>()
       .into_boxed_slice()
   }
@@ -868,6 +917,88 @@ fn push_span_styles<Brush>(
   builder.push(StyleProperty::LineHeight(parley_line_height(line_height)), range.clone());
 }
 
+fn build_backgrounds<Brush>(
+  layout: &ParleyLayout<usize>, source: &AttributedText<Brush>,
+) -> Vec<DrawTextBackground<Brush>>
+where
+  Brush: Clone + PartialEq,
+{
+  let mut backgrounds = Vec::new();
+
+  for span in source.spans.iter() {
+    let Some(brush) = span.style.background_brush.clone() else {
+      continue;
+    };
+    let radius = span
+      .style
+      .background_radius
+      .unwrap_or_default()
+      .max(0.);
+    for (line, rect) in layout_selection_rects(layout, span.range, Vector::zero(), &[]) {
+      merge_background_rect(
+        &mut backgrounds,
+        DrawTextBackground { line, brush: Some(brush.clone()), rect, radius },
+      );
+    }
+  }
+
+  backgrounds
+}
+
+fn merge_background_rect<Brush: PartialEq>(
+  backgrounds: &mut Vec<DrawTextBackground<Brush>>, background: DrawTextBackground<Brush>,
+) {
+  const BACKGROUND_MERGE_EPSILON: f32 = 0.5;
+
+  if background.rect.width() <= 0. || background.rect.height() <= 0. {
+    return;
+  }
+
+  if let Some(last) = backgrounds.last_mut()
+    && last.line == background.line
+    && last.radius == background.radius
+    && last.brush == background.brush
+    && (last.rect.min_y() - background.rect.min_y()).abs() <= BACKGROUND_MERGE_EPSILON
+    && (last.rect.max_y() - background.rect.max_y()).abs() <= BACKGROUND_MERGE_EPSILON
+    && background.rect.min_x() <= last.rect.max_x() + BACKGROUND_MERGE_EPSILON
+  {
+    let min_x = last.rect.min_x().min(background.rect.min_x());
+    let min_y = last.rect.min_y().min(background.rect.min_y());
+    let max_x = last.rect.max_x().max(background.rect.max_x());
+    let max_y = last.rect.max_y().max(background.rect.max_y());
+    last.rect = Rect::new(Point::new(min_x, min_y), Size::new(max_x - min_x, max_y - min_y));
+    return;
+  }
+
+  backgrounds.push(background);
+}
+
+fn layout_selection_rects(
+  layout: &ParleyLayout<usize>, selection: TextRange, origin_offset: Vector, line_offsets: &[f32],
+) -> Vec<(LineIndex, Rect)> {
+  let start = ParleyCursor::from_byte_index(layout, selection.start.0, ParleyAffinity::Downstream);
+  let end = ParleyCursor::from_byte_index(layout, selection.end.0, ParleyAffinity::Upstream);
+
+  ParleySelection::new(start, end)
+    .geometry(layout)
+    .into_iter()
+    .map(|(rect, _)| {
+      let raw_rect = rect_from_box(rect);
+      let line_index = layout_line_index_for_y(layout, raw_rect.center().y);
+      let rect = raw_rect
+        .translate(origin_offset)
+        .translate(Vector::new(
+          line_offsets
+            .get(line_index)
+            .copied()
+            .unwrap_or_default(),
+          0.,
+        ));
+      (LineIndex(line_index), rect)
+    })
+    .collect()
+}
+
 fn parley_line_height(line_height: LineHeight) -> ParleyLineHeight {
   match line_height {
     LineHeight::Scale(value) => ParleyLineHeight::FontSizeRelative(value),
@@ -992,6 +1123,29 @@ fn build_line_positions(
   lines.into_boxed_slice()
 }
 
+fn layout_line_index_for_y(layout: &ParleyLayout<usize>, y: f32) -> usize {
+  let mut lines = layout.lines();
+  let Some(first) = lines.next() else {
+    return 0;
+  };
+
+  if y < first.metrics().min_coord {
+    return 0;
+  }
+
+  for (idx, line) in layout.lines().enumerate() {
+    let metrics = line.metrics();
+    if y < metrics.min_coord {
+      return idx.saturating_sub(1);
+    }
+    if y <= metrics.max_coord {
+      return idx;
+    }
+  }
+
+  layout.len().saturating_sub(1)
+}
+
 fn visual_line(
   metrics: &parley::layout::LineMetrics, origin_offset: Vector, slots: Box<[VisualSlot]>,
 ) -> VisualLine {
@@ -1042,6 +1196,7 @@ fn shift_payload_by_line_offsets<Brush: Clone>(
   payload: &TextDrawPayload<Brush>, layout: &ParleyLayout<usize>, line_offsets: &[f32],
 ) -> TextDrawPayload<Brush> {
   let mut shifted = payload.clone();
+  let mut inline_box_idx = 0;
   let mut run_idx = 0;
   let mut decoration_idx = 0;
   let mut min_offset: f32 = 0.;
@@ -1054,27 +1209,45 @@ fn shift_payload_by_line_offsets<Brush: Clone>(
       .unwrap_or_default();
     min_offset = min_offset.min(line_offset);
     max_offset = max_offset.max(line_offset);
+    if line_offset != 0. {
+      let shift = Vector::new(line_offset, 0.);
+      shifted
+        .backgrounds
+        .iter_mut()
+        .filter(|background| background.line == LineIndex(line_idx))
+        .for_each(|background| background.rect = background.rect.translate(shift));
+    }
 
     for item in line.items() {
-      let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
-        continue;
-      };
-
-      if line_offset != 0.
-        && let Some(run) = shifted.runs.get_mut(run_idx)
-      {
-        run
-          .glyphs
-          .iter_mut()
-          .for_each(|glyph| glyph.baseline_origin.x += line_offset);
+      match item {
+        PositionedLayoutItem::GlyphRun(glyph_run) => {
+          if line_offset != 0.
+            && let Some(run) = shifted.runs.get_mut(run_idx)
+          {
+            run
+              .glyphs
+              .iter_mut()
+              .for_each(|glyph| glyph.baseline_origin.x += line_offset);
+          }
+          run_idx += 1;
+          decoration_idx = shift_run_decorations(
+            &mut shifted.decorations,
+            decoration_idx,
+            glyph_run.style(),
+            line_offset,
+          );
+        }
+        PositionedLayoutItem::InlineBox(_) => {
+          if line_offset != 0.
+            && let Some(inline_box) = shifted.inline_boxes.get_mut(inline_box_idx)
+          {
+            inline_box.rect = inline_box
+              .rect
+              .translate(Vector::new(line_offset, 0.));
+          }
+          inline_box_idx += 1;
+        }
       }
-      run_idx += 1;
-      decoration_idx = shift_run_decorations(
-        &mut shifted.decorations,
-        decoration_idx,
-        glyph_run.style(),
-        line_offset,
-      );
     }
   }
 
@@ -1092,6 +1265,14 @@ fn shift_payload_by_line_offsets<Brush: Clone>(
           .iter_mut()
           .for_each(|glyph| glyph.baseline_origin.x += normalize_x)
       });
+      shifted
+        .backgrounds
+        .iter_mut()
+        .for_each(|background| background.rect = background.rect.translate(shift));
+      shifted
+        .inline_boxes
+        .iter_mut()
+        .for_each(|inline_box| inline_box.rect = inline_box.rect.translate(shift));
       shifted
         .decorations
         .iter_mut()
@@ -1276,6 +1457,7 @@ fn raster_bitmap_from_font(
     .build();
   let image = swash::scale::Render::new(&[
     swash::scale::Source::ColorBitmap(swash::scale::StrikeWith::BestFit),
+    swash::scale::Source::ColorOutline(0),
     swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
     swash::scale::Source::Outline,
   ])
@@ -1425,6 +1607,8 @@ mod tests {
         letter_spacing: Some(0.),
         line_height: None,
         brush: None,
+        background_brush: None,
+        background_radius: None,
         decoration: None,
       },
     );
@@ -1465,6 +1649,8 @@ mod tests {
             letter_spacing: Some(0.),
             line_height: None,
             brush: None,
+            background_brush: None,
+            background_radius: None,
             decoration: None,
           },
         },
@@ -1476,6 +1662,8 @@ mod tests {
             letter_spacing: Some(0.),
             line_height: None,
             brush: Some(TestBrush(7)),
+            background_brush: None,
+            background_radius: None,
             decoration: None,
           },
         },
@@ -1519,6 +1707,8 @@ mod tests {
         letter_spacing: Some(0.),
         line_height: None,
         brush: None,
+        background_brush: None,
+        background_radius: None,
         decoration: None,
       },
     );
@@ -1558,6 +1748,8 @@ mod tests {
         letter_spacing: Some(0.),
         line_height: None,
         brush: None,
+        background_brush: None,
+        background_radius: None,
         decoration: None,
       },
     );
@@ -1601,6 +1793,8 @@ mod tests {
         letter_spacing: Some(0.),
         line_height: None,
         brush: None,
+        background_brush: None,
+        background_radius: None,
         decoration: None,
       },
     );
@@ -1641,6 +1835,8 @@ mod tests {
         letter_spacing: Some(0.),
         line_height: None,
         brush: None,
+        background_brush: None,
+        background_radius: None,
         decoration: None,
       },
     );
@@ -1663,5 +1859,115 @@ mod tests {
       paragraph.layout(&absolute, &paragraph_style, BoxClamp::max_size(Size::new(200., 200.)));
 
     assert!((relative_layout.size().height - absolute_layout.size().height).abs() > 0.1);
+  }
+
+  #[test]
+  fn adjacent_span_backgrounds_are_merged_on_the_same_line() {
+    let services = crate::new_text_services::<TestBrush>();
+    register_test_font(services.as_ref());
+
+    let source = crate::AttributedText::from_parts(
+      "AB",
+      vec![
+        crate::TextSpan {
+          range: crate::TextRange::new(0, 1),
+          style: crate::SpanStyle {
+            font: Some(crate::FontRequest { face: dejavu_face() }),
+            font_size: Some(16.),
+            letter_spacing: Some(0.),
+            line_height: None,
+            brush: None,
+            background_brush: Some(TestBrush(3)),
+            background_radius: Some(6.),
+            decoration: None,
+          },
+        },
+        crate::TextSpan {
+          range: crate::TextRange::new(1, 2),
+          style: crate::SpanStyle {
+            font: Some(crate::FontRequest { face: dejavu_face() }),
+            font_size: Some(16.),
+            letter_spacing: Some(0.),
+            line_height: None,
+            brush: None,
+            background_brush: Some(TestBrush(3)),
+            background_radius: Some(6.),
+            decoration: None,
+          },
+        },
+      ]
+      .into_boxed_slice(),
+    );
+    let paragraph = services.paragraph(source);
+    let text_style = crate::TextStyle {
+      font_size: 16.,
+      font_face: dejavu_face(),
+      letter_space: 0.,
+      line_height: crate::LineHeight::Px(16.),
+      overflow: crate::TextOverflow::Overflow,
+    };
+    let paragraph_style =
+      crate::ParagraphStyle { text_align: crate::TextAlign::Start, wrap: crate::TextWrap::NoWrap };
+    let layout =
+      paragraph.layout(&text_style, &paragraph_style, BoxClamp::max_size(Size::new(200., 200.)));
+    let payload = layout.draw_payload();
+
+    assert_eq!(payload.backgrounds.len(), 1);
+    assert_eq!(payload.backgrounds[0].brush, Some(TestBrush(3)));
+    assert_eq!(payload.backgrounds[0].radius, 6.);
+  }
+
+  #[test]
+  fn payload_contains_positioned_inline_boxes() {
+    let services = crate::new_text_services::<TestBrush>();
+    register_test_font(services.as_ref());
+
+    let source = crate::AttributedText::builder()
+      .push_styled_text(
+        "A",
+        crate::SpanStyle {
+          font: Some(crate::FontRequest { face: dejavu_face() }),
+          font_size: Some(16.),
+          letter_spacing: Some(0.),
+          line_height: None,
+          brush: None,
+          background_brush: None,
+          background_radius: None,
+          decoration: None,
+        },
+      )
+      .push_inline_box(18., 10., 7)
+      .push_styled_text(
+        "B",
+        crate::SpanStyle {
+          font: Some(crate::FontRequest { face: dejavu_face() }),
+          font_size: Some(16.),
+          letter_spacing: Some(0.),
+          line_height: None,
+          brush: None,
+          background_brush: None,
+          background_radius: None,
+          decoration: None,
+        },
+      )
+      .build();
+    let paragraph = services.paragraph(source);
+    let text_style = crate::TextStyle {
+      font_size: 16.,
+      font_face: dejavu_face(),
+      letter_space: 0.,
+      line_height: crate::LineHeight::Px(16.),
+      overflow: crate::TextOverflow::Overflow,
+    };
+    let paragraph_style =
+      crate::ParagraphStyle { text_align: crate::TextAlign::Start, wrap: crate::TextWrap::NoWrap };
+    let layout =
+      paragraph.layout(&text_style, &paragraph_style, BoxClamp::max_size(Size::new(200., 200.)));
+    let payload = layout.draw_payload();
+
+    assert_eq!(payload.inline_boxes.len(), 1);
+    assert_eq!(payload.inline_boxes[0].id, 7);
+    assert!(payload.inline_boxes[0].rect.width() >= 18.);
+    assert!(payload.inline_boxes[0].rect.height() >= 10.);
   }
 }

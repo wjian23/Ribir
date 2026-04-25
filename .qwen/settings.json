@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(cargo *)",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(select-object *)",
+      "Bash(powershell *)"
     ]
   },
   "$version": 3

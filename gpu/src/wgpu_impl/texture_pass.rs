@@ -207,12 +207,12 @@ impl WgpuImpl {
       rpass.set_vertex_buffer(0, pass.vertices_buffer.slice(..));
       rpass.set_bind_group(0, &bind_group, &[]);
 
-      rpass.set_scissor_rect(
-        dest_at.x as u32,
-        dest_at.y as u32,
-        src_rect.width() as u32,
-        src_rect.height() as u32,
-      );
+      let Some(scissor) =
+        super::clamp_scissor_rect(DeviceRect::new(dest_at, src_rect.size), Texture::size(dest_tex))
+      else {
+        return;
+      };
+      rpass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
       rpass.set_pipeline(pass.pipeline.as_ref().unwrap());
 
       rpass.draw(0..4, 0..1)

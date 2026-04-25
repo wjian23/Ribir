@@ -63,6 +63,8 @@ pub struct Span {
   pub text_line_height: SpanStyleValue<LineHeight>,
   pub text_decoration: SpanStyleValue<TextDecorationStyle>,
   pub foreground: SpanStyleValue<Brush>,
+  pub background_brush: SpanStyleValue<Brush>,
+  pub background_radius: SpanStyleValue<f32>,
 }
 
 #[derive(Default)]
@@ -75,6 +77,8 @@ pub struct SpanDeclarer {
   text_line_height: SpanStyleValue<LineHeight>,
   text_decoration: SpanStyleValue<TextDecorationStyle>,
   foreground: SpanStyleValue<Brush>,
+  background_brush: SpanStyleValue<Brush>,
+  background_radius: SpanStyleValue<f32>,
 }
 
 impl Declare for Span {
@@ -101,6 +105,8 @@ impl ObjDeclarer for SpanDeclarer {
       text_line_height: self.text_line_height,
       text_decoration: self.text_decoration,
       foreground: self.foreground,
+      background_brush: self.background_brush,
+      background_radius: self.background_radius,
     }
   }
 }
@@ -163,6 +169,22 @@ impl SpanDeclarer {
     self.foreground = Some(v.r_into());
     self
   }
+
+  #[inline]
+  pub fn with_background_brush<K: ?Sized>(
+    &mut self, v: impl RInto<PipeValue<Brush>, K>,
+  ) -> &mut Self {
+    self.background_brush = Some(v.r_into());
+    self
+  }
+
+  #[inline]
+  pub fn with_background_radius<K: ?Sized>(
+    &mut self, v: impl RInto<PipeValue<f32>, K>,
+  ) -> &mut Self {
+    self.background_radius = Some(v.r_into());
+    self
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -175,6 +197,8 @@ struct SpanSnapshot {
   pub text_line_height: Option<LineHeight>,
   pub text_decoration: Option<TextDecorationStyle>,
   pub foreground: Option<Brush>,
+  pub background_brush: Option<Brush>,
+  pub background_radius: Option<f32>,
 }
 
 impl Span {
@@ -195,6 +219,8 @@ impl Span {
       text_line_height,
       text_decoration,
       foreground,
+      background_brush,
+      background_radius,
     } = self;
     let (text, text_stream) = text.unzip();
     let (font, font_stream) = unzip_optional_pipe(font);
@@ -203,6 +229,8 @@ impl Span {
     let (text_line_height, text_line_height_stream) = unzip_optional_pipe(text_line_height);
     let (text_decoration, text_decoration_stream) = unzip_optional_pipe(text_decoration);
     let (foreground, foreground_stream) = unzip_optional_pipe(foreground);
+    let (background_brush, background_brush_stream) = unzip_optional_pipe(background_brush);
+    let (background_radius, background_radius_stream) = unzip_optional_pipe(background_radius);
 
     let index = append_fragment(
       this,
@@ -215,6 +243,8 @@ impl Span {
         text_line_height,
         text_decoration,
         foreground,
+        background_brush,
+        background_radius,
       }),
     );
 
@@ -243,6 +273,20 @@ impl Span {
       set_span_text_decoration,
     );
     push_fragment_subscription(subscriptions, this, index, foreground_stream, set_span_foreground);
+    push_fragment_subscription(
+      subscriptions,
+      this,
+      index,
+      background_brush_stream,
+      set_span_background_brush,
+    );
+    push_fragment_subscription(
+      subscriptions,
+      this,
+      index,
+      background_radius_stream,
+      set_span_background_radius,
+    );
   }
 }
 
@@ -263,6 +307,8 @@ impl SpanSnapshot {
       || self.letter_spacing.is_some()
       || self.text_line_height.is_some()
       || self.foreground.is_some()
+      || self.background_brush.is_some()
+      || self.background_radius.is_some()
       || self
         .decoration_style(inherited_decoration)
         .is_some()
@@ -306,6 +352,8 @@ impl SpanSnapshot {
       letter_spacing: self.letter_spacing,
       line_height: self.text_line_height,
       brush: self.foreground.clone(),
+      background_brush: self.background_brush.clone(),
+      background_radius: self.background_radius,
       decoration: self.decoration_style(inherited_decoration),
     }
   }
@@ -425,6 +473,20 @@ fn set_span_text_decoration(fragment: &mut RichTextFragment, text_decoration: Te
 fn set_span_foreground(fragment: &mut RichTextFragment, foreground: Brush) {
   match fragment {
     RichTextFragment::Span(span) => span.foreground = Some(foreground),
+    RichTextFragment::Text(_) => unreachable!("expected a span fragment"),
+  }
+}
+
+fn set_span_background_brush(fragment: &mut RichTextFragment, background_brush: Brush) {
+  match fragment {
+    RichTextFragment::Span(span) => span.background_brush = Some(background_brush),
+    RichTextFragment::Text(_) => unreachable!("expected a span fragment"),
+  }
+}
+
+fn set_span_background_radius(fragment: &mut RichTextFragment, background_radius: f32) {
+  match fragment {
+    RichTextFragment::Span(span) => span.background_radius = Some(background_radius),
     RichTextFragment::Text(_) => unreachable!("expected a span fragment"),
   }
 }
@@ -647,6 +709,14 @@ pub struct RichText {
 pub struct RichTextSelectable {
   #[declare(skip)]
   host: RichText,
+}
+
+impl RichTextSelectable {
+  pub fn host_writer(
+    this: impl StateWriter<Value = Self> + 'static,
+  ) -> Box<dyn StateWriter<Value = RichText>> {
+    Box::new(this.part_writer(PartialId::any(), |selectable| PartMut::new(&mut selectable.host)))
+  }
 }
 
 fn compose_rich_text(
@@ -1517,7 +1587,7 @@ mod tests {
     reset_test_env!();
     register_test_font();
 
-    let area_state = Stateful::new(SelectableArea::default());
+    let area_state = Stateful::new(SelectableArea::<TextPosition, TextAreaData>::default());
     let area = area_state.clone_writer();
     let area_for_layout = area_state.clone_writer();
     let queried = Stateful::new(false);
@@ -1546,12 +1616,12 @@ mod tests {
         );
 
         @FatObj {
-          on_performed_layout: move |e| {
+          on_performed_layout: move |_| {
             if *$read(queried) {
               return;
             }
             *$write(queried) = true;
-            let _ = $read(area_for_layout).select_all(e);
+            $write(area_for_layout).select_all();
           },
           @ { area }
         }

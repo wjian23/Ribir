@@ -104,6 +104,13 @@ impl DrawAlphaTrianglesPass {
     &mut self, indices: &Range<u32>, texture: &WgpuTexture, scissor: Option<DeviceRect>,
     _queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, size_offset: u32,
   ) {
+    let scissor = match scissor {
+      Some(scissor) => match super::clamp_scissor_rect(scissor, texture.size()) {
+        Some(scissor) => Some(scissor),
+        None => return,
+      },
+      None => None,
+    };
     let color_attachments = texture.color_attachments(None);
 
     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -132,12 +139,7 @@ impl DrawAlphaTrianglesPass {
       );
 
       if let Some(scissor) = scissor {
-        rpass.set_scissor_rect(
-          scissor.min_x() as u32,
-          scissor.min_y() as u32,
-          scissor.width() as u32,
-          scissor.height() as u32,
-        );
+        rpass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
       }
       rpass.set_pipeline(&self.pipeline);
       rpass.draw_indexed(indices.clone(), 0, 0..SAMPLE_COUNT)

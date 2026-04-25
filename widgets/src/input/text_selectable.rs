@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, ops::Range};
+use std::{cell::RefCell, marker::PhantomData, ops::Range};
 
 use ribir_core::{prelude::*, wrap_render::WrapRender};
 
@@ -100,6 +100,12 @@ pub struct SelectionOverlay {
   pub rects: Vec<Rect>,
 }
 
+#[derive(Default, Declare)]
+pub struct SelectionHighlight {
+  #[declare(skip)]
+  rects: RefCell<Vec<Rect>>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextSelection<T> {
   pub range: TextSelectionRange,
@@ -135,7 +141,7 @@ impl SelectionOverlayDeclarer {
   }
 }
 
-impl<T: BaseText + VisualText + Clone + 'static> Compose for TextSelectable<T> {
+impl<T: BaseText + SyncLayoutVisualText + Clone + 'static> Compose for TextSelectable<T> {
   fn compose(this: impl StateWriter<Value = Self>) -> Widget<'static> {
     fn_widget! {
       let text_state = part_writer!(&mut this.text);
@@ -161,7 +167,7 @@ fn is_move_by_word(event: &KeyboardEvent) -> bool {
   return event.with_ctrl_key();
 }
 
-pub(super) fn key_move_mode(event: &KeyboardEvent) -> MoveMode {
+pub(crate) fn key_move_mode(event: &KeyboardEvent) -> MoveMode {
   if is_move_by_word(event) {
     MoveMode::Word
   } else if event.with_command_key() {
@@ -171,7 +177,7 @@ pub(super) fn key_move_mode(event: &KeyboardEvent) -> MoveMode {
   }
 }
 
-impl<T: BaseText + 'static> Selectable for TextGlyphs<T> {
+impl<T: BaseText + SyncLayoutVisualText + 'static> Selectable for TextGlyphs<T> {
   type Position = TextPosition;
   type Range = TextSelectionRange;
 
@@ -310,52 +316,60 @@ impl<T: BaseText + 'static> Selectable for TextGlyphs<T> {
   }
 }
 
-impl<T: BaseText + 'static> Selectable for TextSelectable<T> {
+impl<T: BaseText + SyncLayoutVisualText + 'static> Selectable for TextSelectable<T> {
   type Position = TextPosition;
   type Range = TextSelectionRange;
 
-  fn hit_test(&self, point: Point) -> Option<Self::Position> { self.text.hit_test(point) }
-
-  fn nearest_position(&self, point: Point) -> Option<Self::Position> {
-    self.text.nearest_position(point)
+  fn hit_test(&self, point: Point) -> Option<Self::Position> {
+    Selectable::hit_test(&self.text, point)
   }
 
-  fn first_position(&self) -> Option<Self::Position> { self.text.first_position() }
+  fn nearest_position(&self, point: Point) -> Option<Self::Position> {
+    Selectable::nearest_position(&self.text, point)
+  }
 
-  fn last_position(&self) -> Option<Self::Position> { self.text.last_position() }
+  fn first_position(&self) -> Option<Self::Position> { Selectable::first_position(&self.text) }
+
+  fn last_position(&self) -> Option<Self::Position> { Selectable::last_position(&self.text) }
 
   fn move_left(&self, pos: &Self::Position, mode: MoveMode) -> BoundaryResult<Self::Position> {
-    self.text.move_left(pos, mode)
+    Selectable::move_left(&self.text, pos, mode)
   }
 
   fn move_right(&self, pos: &Self::Position, mode: MoveMode) -> BoundaryResult<Self::Position> {
-    self.text.move_right(pos, mode)
+    Selectable::move_right(&self.text, pos, mode)
   }
 
   fn move_up(&self, pos: &Self::Position) -> BoundaryResult<Self::Position> {
-    self.text.move_up(pos)
+    Selectable::move_up(&self.text, pos)
   }
 
   fn move_down(&self, pos: &Self::Position) -> BoundaryResult<Self::Position> {
-    self.text.move_down(pos)
+    Selectable::move_down(&self.text, pos)
   }
 
   fn make_range(&self, anchor: Self::Position, focus: Self::Position) -> Self::Range {
-    self.text.make_range(anchor, focus)
+    Selectable::make_range(&self.text, anchor, focus)
   }
 
-  fn is_collapsed(&self, range: &Self::Range) -> bool { self.text.is_collapsed(range) }
+  fn is_collapsed(&self, range: &Self::Range) -> bool {
+    Selectable::is_collapsed(&self.text, range)
+  }
 
-  fn caret_rect(&self, pos: &Self::Position) -> Option<Rect> { self.text.caret_rect(pos) }
+  fn caret_rect(&self, pos: &Self::Position) -> Option<Rect> {
+    Selectable::caret_rect(&self.text, pos)
+  }
 
-  fn selection_rects(&self, range: &Self::Range) -> Vec<Rect> { self.text.selection_rects(range) }
+  fn selection_rects(&self, range: &Self::Range) -> Vec<Rect> {
+    Selectable::selection_rects(&self.text, range)
+  }
 
   fn select_unit(&self, pos: &Self::Position, mode: MoveMode) -> Option<Self::Range> {
-    self.text.select_unit(pos, mode)
+    Selectable::select_unit(&self.text, pos, mode)
   }
 }
 
-impl<T: BaseText + 'static> SelectableWithContent for TextSelectable<T> {
+impl<T: BaseText + SyncLayoutVisualText + 'static> SelectableWithContent for TextSelectable<T> {
   fn selection_text(&self, range: &TextSelectionRange) -> String {
     self
       .text
@@ -389,24 +403,52 @@ impl SelectionOverlay {
   }
 }
 
-impl WrapRender for SelectionOverlay {
-  fn paint(&self, host: &dyn Render, ctx: &mut PaintingCtx) {
-    Self::paint_rects(&self.rects, ctx);
-    host.paint(ctx);
-  }
-
-  fn wrapper_dirty_phase(&self) -> DirtyPhase { DirtyPhase::Paint }
+pub struct SelectionRectProvider {
+  pub rects: Box<SelectionRectsFn>,
 }
 
-impl<'c> ComposeChild<'c> for SelectionOverlay {
-  type Child = Widget<'c>;
-
-  fn compose_child(this: impl StateWriter<Value = Self>, child: Self::Child) -> Widget<'c> {
-    WrapRender::combine_child(this, child)
+impl SelectionRectProvider {
+  pub fn new(rects: impl Fn(&MeasureCtx) -> Vec<Rect> + 'static) -> Self {
+    Self { rects: Box::new(rects) }
   }
 }
 
-impl<T: 'static> WrapRender for TextSelection<T> {
+type SelectionRectsFn = dyn Fn(&MeasureCtx) -> Vec<Rect>;
+
+impl Render for SelectionHighlight {
+  fn measure(&self, clamp: BoxClamp, ctx: &mut MeasureCtx) -> Size {
+    *self.rects.borrow_mut() = Provider::of::<SelectionRectProvider>(ctx)
+      .map(|provider| (provider.rects)(ctx))
+      .unwrap_or_default();
+    clamp.max
+  }
+
+  fn paint(&self, ctx: &mut PaintingCtx) {
+    let brush = Provider::of::<TextSelectionStyle>(ctx).map(|style| style.brush.clone());
+
+    if let Some(brush) = brush
+      && !self.rects.borrow().is_empty()
+      && brush.is_visible()
+    {
+      let painter = ctx.painter();
+      let rects = self
+        .rects
+        .borrow()
+        .iter()
+        .copied()
+        .filter(|rect| painter.intersection_paint_bounds(rect).is_some())
+        .collect::<Vec<_>>();
+      painter.save();
+      painter.set_fill_brush(brush);
+      rects.into_iter().for_each(|rect| {
+        painter.rect(&rect, true).fill();
+      });
+      painter.restore();
+    }
+  }
+}
+
+impl<T: SyncLayoutVisualText + 'static> WrapRender for TextSelection<T> {
   fn paint(&self, host: &dyn Render, ctx: &mut PaintingCtx) {
     let rects = Provider::of::<TextGlyphs<T>>(ctx).and_then(|text| {
       text
@@ -424,7 +466,7 @@ impl<T: 'static> WrapRender for TextSelection<T> {
   fn wrapper_dirty_phase(&self) -> DirtyPhase { DirtyPhase::Paint }
 }
 
-impl<'c, T: 'static> ComposeChild<'c> for TextSelection<T> {
+impl<'c, T: SyncLayoutVisualText + 'static> ComposeChild<'c> for TextSelection<T> {
   type Child = Widget<'c>;
 
   fn compose_child(this: impl StateWriter<Value = Self>, child: Self::Child) -> Widget<'c> {

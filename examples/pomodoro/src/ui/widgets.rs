@@ -121,9 +121,9 @@ impl Compose for WindowBar {
           .map(|in_mini| if in_mini { MINI_WINDOW_BAR } else { WINDOW_BAR }),
         @PointerSelectRegion {
           on_custom: move |e: &mut PointerSelectEvent| {
-            if let PointerSelectData::Move{ from, to } |
-              PointerSelectData::End { from, to } = e.data() {
-                e.window().set_position(e.window().position() + (*to - *from));
+            if let PointerSelectData::Move { from, to }
+              | PointerSelectData::End { from, to } = e.data() {
+              e.window().set_position(e.window().position() + (to - from));
             }
           },
           @Container {

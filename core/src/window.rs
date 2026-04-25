@@ -711,8 +711,11 @@ impl Window {
 
         DelayEvent::Chars { id, chars } => {
           let event = CharsEvent::new(chars.clone(), self.tree().root(), self);
-          self.top_down_emit(&mut Event::CharsCapture(event), id);
-          self.bottom_up_emit(&mut Event::Chars(CharsEvent::new(chars, id, self)), None);
+          let mut capture_event = Event::CharsCapture(event);
+          self.top_down_emit(&mut capture_event, id);
+          if capture_event.is_propagation() {
+            self.bottom_up_emit(&mut Event::Chars(CharsEvent::new(chars, id, self)), None);
+          }
         }
         DelayEvent::Wheel { id, delta_x, delta_y } => {
           let event = WheelEvent::new(delta_x, delta_y, self.tree().root(), self);

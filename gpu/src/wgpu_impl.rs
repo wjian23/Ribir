@@ -45,6 +45,15 @@ mod texture_pass;
 
 pub const TEX_PER_DRAW: usize = 8;
 
+fn clamp_scissor_rect(rect: DeviceRect, target_size: DeviceSize) -> Option<(u32, u32, u32, u32)> {
+  let rect = rect.intersection(&DeviceRect::from_size(target_size))?;
+  if rect.width() <= 0 || rect.height() <= 0 {
+    return None;
+  }
+
+  Some((rect.min_x() as u32, rect.min_y() as u32, rect.width() as u32, rect.height() as u32))
+}
+
 pub struct WgpuImpl {
   device: wgpu::Device,
   queue: wgpu::Queue,

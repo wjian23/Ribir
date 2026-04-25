@@ -29,5 +29,5 @@ wgpu = ["ribir/wgpu"]
 debug = ["ribir/debug"]
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["lib"]
 path = "src/lib.rs"

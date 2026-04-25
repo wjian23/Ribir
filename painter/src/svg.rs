@@ -1,4 +1,4 @@
-use std::{cell::RefCell, error::Error, io::Read, vec};
+use std::{cell::RefCell, error::Error, io::Read, sync::LazyLock, vec};
 
 use ribir_algo::Resource;
 use ribir_types::{Point, Rect, Size, Transform};
@@ -33,7 +33,6 @@ struct StaticSvg {
   commands: Resource<Box<[PaintCommand]>>,
 }
 
-// todo: share fontdb
 impl Svg {
   // FIXME: This is a temporary workaround. Utilize the magic color for the SVG,
   // and replace it with the actual color when rendering.
@@ -57,8 +56,8 @@ impl Svg {
       _ => None,
     };
 
-    let opt = Options { style_sheet, ..<_>::default() };
-    let tree = Tree::from_data(svg_data, &opt).unwrap();
+    let opt = svg_options(style_sheet);
+    let tree = Tree::from_data(svg_data, &opt)?;
 
     let size = tree.size();
 
@@ -128,6 +127,25 @@ impl Svg {
   }
 
   pub fn deserialize(str: &str) -> Result<Self, Box<dyn Error>> { Ok(serde_json::from_str(str)?) }
+}
+
+fn svg_options(style_sheet: Option<String>) -> Options<'static> {
+  let mut opt = Options { style_sheet, ..<_>::default() };
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    opt.fontdb = shared_svg_fontdb();
+  }
+  opt
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn shared_svg_fontdb() -> std::sync::Arc<usvg::fontdb::Database> {
+  static FONTDB: LazyLock<std::sync::Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
+    let mut fontdb = usvg::fontdb::Database::new();
+    fontdb.load_system_fonts();
+    std::sync::Arc::new(fontdb)
+  });
+  FONTDB.clone()
 }
 
 fn paint_group(g: &usvg::Group, painter: &mut crate::Painter) {
@@ -390,5 +408,23 @@ impl std::fmt::Debug for Svg {
       .field("size", &self.size)
       .field("commands_len", &self.commands.len())
       .finish()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[cfg(not(target_arch = "wasm32"))]
+  #[test]
+  fn parse_svg_text() {
+    let svg = Svg::parse_from_bytes(
+      br#"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="40"><text x="4" y="30" font-size="24" font-family="sans-serif">Ribir</text></svg>"#,
+      false,
+      false,
+    )
+    .unwrap();
+
+    assert!(svg.command_size() > 0);
   }
 }

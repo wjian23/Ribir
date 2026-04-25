@@ -241,14 +241,15 @@ impl Compose for Slider {
     fn_widget! {
       let mut track = @Flex { align_items: Align::Center };
       let track_width = track.layout_width();
-      @PointerSelectRegion {
-        on_custom: move |e: &mut PointerSelectEvent| {
-          let width = *$read(track_width);
-          if width > 0. {
-            let (_, to) = e.data().endpoints();
-            $read(this).request_value_change(to.x / width, e);
-          }
-        },
+        @PointerSelectRegion {
+          on_custom: move |e: &mut PointerSelectEvent| {
+            let width = *$read(track_width);
+            if width > 0. {
+              let (_, to) = e.data().endpoints();
+              let to = e.map_to_local(to);
+              $read(this).request_value_change(to.x / width, e);
+            }
+          },
         @Stack {
           class: SLIDER_CONTAINER,
           @(track) {
@@ -459,9 +460,10 @@ impl Compose for RangeSlider {
           let width = *$read(track_width);
           if width <= 0. { return; }
           let (_, to) = e.data().endpoints();
+          let to = e.map_to_local(to);
           let mut active_part = $write(active_part);
           if let PointerSelectData::Start(p) = e.data() {
-            let ratio = p.x / width;
+            let ratio = e.map_to_local(*p).x / width;
             *active_part = $read(this).choose_part(ratio);
           }
           $read(this).request_value_change(to.x / width, *active_part, e);

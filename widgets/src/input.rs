@@ -246,6 +246,12 @@ impl VisualText for InputText {
   }
 }
 
+impl SyncLayoutVisualText for InputText {
+  fn sync_layout_glyphs(&self, layout_ctx: &TextGlyphLayoutContext) -> ParagraphLayoutRef {
+    self.0.sync_layout_glyphs(layout_ctx)
+  }
+}
+
 impl EditText for InputText {
   fn insert_str(&mut self, at: usize, v: &str) -> usize {
     let new_v = v
@@ -267,6 +273,24 @@ pub struct CaretPosition {
   pub affinity: CaretAffinity,
   /// the position of the caret, it may be set by the ui interaction
   pub position: Option<(usize, usize)>,
+}
+
+impl Ord for CaretPosition {
+  fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    self.cluster.cmp(&other.cluster).then_with(|| {
+      if self.affinity == other.affinity {
+        std::cmp::Ordering::Equal
+      } else if self.affinity == CaretAffinity::Downstream {
+        std::cmp::Ordering::Greater
+      } else {
+        std::cmp::Ordering::Less
+      }
+    })
+  }
+}
+
+impl PartialOrd for CaretPosition {
+  fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) }
 }
 
 impl CaretPosition {

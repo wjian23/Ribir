@@ -160,13 +160,13 @@ where
         let paint_bounds = transform_to_device_rect(&path_bounds, matrix);
         let alloc_size = size_expand_blank(paint_bounds.size);
 
-        let (visual_rect, clip_rect) = if self.alpha_atlas.is_good_size_to_alloc(alloc_size) {
-          (paint_bounds, None)
+        let need_clip_rect = !self.alpha_atlas.is_good_size_to_alloc(alloc_size);
+        let visual_rect = if !need_clip_rect {
+          paint_bounds
         } else {
           // We intersect the path bounds with the viewport to reduce the number of pixels
           // drawn for large paths.
-          let visual_rect = paint_bounds.intersection(viewport).unwrap();
-          (visual_rect, Some(visual_rect))
+          paint_bounds.intersection(viewport).unwrap()
         };
 
         let (_, slice) = self.alpha_allocate(visual_rect.size, gpu);
@@ -174,6 +174,7 @@ where
           .to_f32()
           .cast_unit();
         let ts = matrix.then_translate(offset);
+        let clip_rect = need_clip_rect.then_some(slice.rect);
         let task =
           TessTask { slice, transform: ts, path: path.clone(), style: style.clone(), clip_rect };
         self.tess_task.push(task);
@@ -699,5 +700,29 @@ pub mod tests {
 
     let atlas_img = block_on(atlas_img).unwrap();
     assert_eq!(atlas_img.pixel_bytes(), rgba_pixels_with_bleed(&img));
+  }
+
+  #[test]
+  fn oversized_path_scissor_uses_atlas_space() {
+    let mut wgpu = block_on(WgpuImpl::headless());
+    let mut mgr = TexturesMgr::<WgpuTexture>::new(&mut wgpu);
+    let path = PaintPath::Own(Path::rect(&rect(0., 0., 3000., 3000.)));
+    let viewport = rect(832, 1043, 1568, 557);
+
+    let _ = mgr.store_alpha_path(
+      &path,
+      &PaintingStyle::Fill,
+      &Transform::identity(),
+      &viewport,
+      &mut wgpu,
+    );
+
+    let task = mgr.tess_task.last().unwrap();
+    let clip_rect = task.clip_rect.unwrap();
+    let tex_size = mgr.texture(task.slice.tex_id).size();
+
+    assert_eq!(clip_rect, task.slice.rect);
+    assert!(clip_rect.max_x() <= tex_size.width);
+    assert!(clip_rect.max_y() <= tex_size.height);
   }
 }

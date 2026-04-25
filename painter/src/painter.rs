@@ -907,12 +907,40 @@ impl Painter {
     invisible_return!(self);
     let mut default_brush = CommandBrush::from(self.fill_brush().clone());
     default_brush.apply_color_filter(self.current_color_filter());
+    let transform = *self.transform();
+
+    payload.backgrounds.iter().for_each(|background| {
+      let brush = background
+        .brush
+        .clone()
+        .map(|brush| {
+          let mut brush = CommandBrush::from(brush);
+          brush.apply_color_filter(self.current_color_filter());
+          brush
+        })
+        .unwrap_or_else(|| default_brush.clone());
+      let path = if background.radius > 0. {
+        Path::rect_round(&background.rect, &Radius::all(background.radius))
+      } else {
+        Path::rect(&background.rect)
+      };
+      self
+        .commands
+        .push(PaintCommand::Path(PathCommand::new(
+          PaintPath::Share(Resource::new(path)),
+          PaintPathAction::Paint { brush, painting_style: PaintingStyle::Fill },
+          transform,
+        )));
+    });
+
+    let mut text_payload = (*payload).clone();
+    text_payload.backgrounds = Box::default();
     self
       .commands
       .push(PaintCommand::Text(TextCommand {
         paint_bounds,
-        transform: *self.transform(),
-        payload,
+        transform,
+        payload: Resource::new(text_payload),
         default_brush,
         color_filter: *self.current_color_filter(),
       }));

@@ -401,9 +401,12 @@ impl Scheduler {
   }
 
   async fn drain_frame_work(&mut self, wnd: &Window) {
-    self.drain_frame_queue(wnd);
-    yield_now().await;
-    self.flush_global_changes();
+    let mut has_changed = true;
+    while has_changed {
+      self.drain_frame_queue(wnd);
+      yield_now().await;
+      has_changed = self.flush_global_changes();
+    }
   }
 
   fn close_window(&mut self, wnd: Rc<Window>) {

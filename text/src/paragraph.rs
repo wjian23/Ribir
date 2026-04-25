@@ -76,6 +76,14 @@ pub struct TextSpan<Brush> {
   pub style: SpanStyle<Brush>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextInlineBox {
+  pub id: u64,
+  pub index: TextByteIndex,
+  pub width: f32,
+  pub height: f32,
+}
+
 pub type LayoutClamp = BoxClamp;
 pub type ParagraphLayoutRef<Brush> = Arc<Box<dyn ParagraphLayout<Brush>>>;
 

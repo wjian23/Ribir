@@ -23,20 +23,93 @@ where
   text: T,
   #[declare(skip)]
   glyphs: RefCell<Option<ParagraphLayoutRef>>,
+  #[declare(skip)]
+  layout_ctx: RefCell<Option<TextGlyphLayoutContext>>,
 }
 
 impl<T: 'static> TextGlyphs<T> {
-  pub fn new(text: T) -> Self { Self { text, glyphs: Default::default() } }
+  pub fn new(text: T) -> Self {
+    Self { text, glyphs: Default::default(), layout_ctx: Default::default() }
+  }
 
   pub fn text(&self) -> &T { &self.text }
 
   pub fn text_mut(&mut self) -> &mut T {
-    self.glyphs.take();
+    self.invalidate_glyphs();
     &mut self.text
   }
 
+  pub fn set_text(&mut self, text: T) -> T {
+    self.invalidate_glyphs();
+    std::mem::replace(&mut self.text, text)
+  }
+
+  fn invalidate_glyphs(&self) { self.glyphs.borrow_mut().take(); }
+}
+
+#[derive(Clone, PartialEq)]
+pub struct TextGlyphLayoutContext {
+  clamp: BoxClamp,
+  text_style: TextStyle,
+  text_align: TextAlign,
+  text_decoration: Option<TextDecorationStyle>,
+}
+
+impl TextGlyphLayoutContext {
+  fn normalize_clamp(clamp: BoxClamp) -> BoxClamp { clamp.free_height() }
+
+  pub fn capture(clamp: BoxClamp, ctx: &impl AsRef<ProviderCtx>) -> Self {
+    let text_style = Provider::of::<TextStyle>(ctx).unwrap().clone();
+    let text_align = Provider::of::<TextAlign>(ctx)
+      .map(|align| *align)
+      .unwrap_or_default();
+    let text_decoration = Provider::of::<TextDecorationStyle>(ctx)
+      .map(|style| (*style).clone())
+      .filter(|style| !style.decoration.is_empty());
+    Self { clamp: Self::normalize_clamp(clamp), text_style, text_align, text_decoration }
+  }
+
+  pub fn clamp(&self) -> BoxClamp { self.clamp }
+
+  pub fn text_style(&self) -> &TextStyle { &self.text_style }
+
+  pub fn text_align(&self) -> TextAlign { self.text_align }
+
+  pub fn text_decoration(&self) -> Option<&TextDecorationStyle> { self.text_decoration.as_ref() }
+}
+
+pub trait SyncLayoutVisualText: VisualText {
+  fn sync_layout_glyphs(&self, layout_ctx: &TextGlyphLayoutContext) -> ParagraphLayoutRef;
+}
+
+impl<T: SyncLayoutVisualText + 'static> TextGlyphs<T> {
+  fn force_layout_with_context(&self, layout_ctx: TextGlyphLayoutContext) -> ParagraphLayoutRef {
+    if Some(&layout_ctx) == self.layout_ctx.borrow().as_ref() && self.glyphs.borrow().is_some() {
+      return self.glyphs.borrow().clone().unwrap();
+    }
+    let glyphs = self.text.sync_layout_glyphs(&layout_ctx);
+    *self.layout_ctx.borrow_mut() = Some(layout_ctx);
+    *self.glyphs.borrow_mut() = Some(glyphs.clone());
+    glyphs
+  }
+
+  fn ensure_glyphs(&self) {
+    if self.glyphs.borrow().is_some() {
+      return;
+    }
+    let Some(layout_ctx) = self.layout_ctx.borrow().clone() else {
+      return;
+    };
+    let _ = self.force_layout_with_context(layout_ctx);
+  }
+
   pub fn glyphs(&self) -> Option<Ref<'_, ParagraphLayoutRef>> {
+    self.ensure_glyphs();
     Ref::filter_map(self.glyphs.borrow(), |v| v.as_ref()).ok()
+  }
+
+  pub fn force_layout(&self, clamp: BoxClamp, ctx: &impl AsRef<ProviderCtx>) -> ParagraphLayoutRef {
+    self.force_layout_with_context(TextGlyphLayoutContext::capture(clamp, ctx))
   }
 }
 
@@ -50,16 +123,19 @@ pub trait VisualText: BaseText {
   );
 }
 
+fn plain_text_layout(text: &str, layout_ctx: &TextGlyphLayoutContext) -> ParagraphLayoutRef {
+  let paragraph_style =
+    single_style_paragraph_style(layout_ctx.text_style(), layout_ctx.text_align());
+  let paragraph = AppCtx::text_services().paragraph(AttributedText::styled(
+    text.to_owned(),
+    single_style_span_style(layout_ctx.text_style(), None),
+  ));
+  paragraph.layout(layout_ctx.text_style(), &paragraph_style, layout_ctx.clamp())
+}
+
 impl VisualText for CowArc<str> {
   fn layout_glyphs(&self, clamp: BoxClamp, ctx: &MeasureCtx) -> ParagraphLayoutRef {
-    let style = Provider::of::<TextStyle>(ctx).unwrap();
-    let text_align = Provider::of::<TextAlign>(ctx)
-      .map(|align| *align)
-      .unwrap_or_default();
-    let paragraph_style = single_style_paragraph_style(&style, text_align);
-    let paragraph = AppCtx::text_services()
-      .paragraph(AttributedText::styled(self.to_string(), single_style_span_style(&style, None)));
-    paragraph.layout(&style, &paragraph_style, clamp)
+    self.sync_layout_glyphs(&TextGlyphLayoutContext::capture(clamp, ctx))
   }
 
   fn paint(
@@ -74,6 +150,12 @@ impl VisualText for CowArc<str> {
       Resource::new(glyphs.draw_payload().clone()),
       glyphs.draw_payload().bounds,
     );
+  }
+}
+
+impl SyncLayoutVisualText for CowArc<str> {
+  fn sync_layout_glyphs(&self, layout_ctx: &TextGlyphLayoutContext) -> ParagraphLayoutRef {
+    plain_text_layout(self.as_ref(), layout_ctx)
   }
 }
 
@@ -121,21 +203,12 @@ fn attributed_text_with_default_decoration(
     });
   }
 
-  AttributedText::from_parts(text.text.clone(), spans)
+  AttributedText::from_parts_with_inline_boxes(text.text.clone(), spans, text.inline_boxes.clone())
 }
 
 impl VisualText for AttributedText {
   fn layout_glyphs(&self, clamp: BoxClamp, ctx: &MeasureCtx) -> ParagraphLayoutRef {
-    let style = Provider::of::<TextStyle>(ctx).unwrap();
-    let text_align = Provider::of::<TextAlign>(ctx)
-      .map(|align| *align)
-      .unwrap_or_default();
-    let text_decoration = Provider::of::<TextDecorationStyle>(ctx).map(|style| (*style).clone());
-    let paragraph_style = single_style_paragraph_style(&style, text_align);
-    let text = attributed_text_with_default_decoration(self, text_decoration);
-    AppCtx::text_services()
-      .paragraph(text)
-      .layout(&style, &paragraph_style, clamp)
+    self.sync_layout_glyphs(&TextGlyphLayoutContext::capture(clamp, ctx))
   }
 
   fn paint(
@@ -153,7 +226,20 @@ impl VisualText for AttributedText {
   }
 }
 
-impl<T: VisualText> TextGlyphs<T> {
+impl SyncLayoutVisualText for AttributedText {
+  fn sync_layout_glyphs(&self, layout_ctx: &TextGlyphLayoutContext) -> ParagraphLayoutRef {
+    let paragraph_style =
+      single_style_paragraph_style(layout_ctx.text_style(), layout_ctx.text_align());
+    let text = attributed_text_with_default_decoration(self, layout_ctx.text_decoration().cloned());
+    AppCtx::text_services().paragraph(text).layout(
+      layout_ctx.text_style(),
+      &paragraph_style,
+      layout_ctx.clamp(),
+    )
+  }
+}
+
+impl<T: SyncLayoutVisualText> TextGlyphs<T> {
   pub fn paint(&self, painter: &mut Painter, style: PaintingStyle, rect: Rect) {
     if let Some(glyphs) = self.glyphs() {
       self.text.paint(painter, style, &glyphs, rect);
@@ -161,16 +247,13 @@ impl<T: VisualText> TextGlyphs<T> {
   }
 
   pub fn layout_glyphs(&mut self, clamp: BoxClamp, ctx: &MeasureCtx) {
-    *self.glyphs.borrow_mut() = Some(self.text.layout_glyphs(clamp, ctx));
+    let _ = self.force_layout(clamp, ctx);
   }
 }
 
-impl<T: VisualText + 'static> Render for TextGlyphs<T> {
+impl<T: SyncLayoutVisualText + 'static> Render for TextGlyphs<T> {
   fn measure(&self, clamp: BoxClamp, ctx: &mut MeasureCtx) -> Size {
-    let glyphs = self.text.layout_glyphs(clamp, ctx);
-    let size = glyphs.size();
-    *self.glyphs.borrow_mut() = Some(glyphs);
-    size
+    self.force_layout(clamp, ctx).size()
   }
 
   fn paint(&self, ctx: &mut PaintingCtx) {
@@ -184,10 +267,11 @@ impl<T: VisualText + 'static> Render for TextGlyphs<T> {
     };
 
     let style = Provider::of::<PaintingStyle>(ctx).map(|p| p.clone());
-    let layout = self.glyphs().unwrap();
-    self
-      .text
-      .paint(ctx.painter(), style.unwrap_or(PaintingStyle::Fill), &layout, box_rect);
+    if let Some(layout) = self.glyphs() {
+      self
+        .text
+        .paint(ctx.painter(), style.unwrap_or(PaintingStyle::Fill), &layout, box_rect);
+    }
   }
 }
 
@@ -338,7 +422,10 @@ impl<T> std::ops::Deref for TextGlyphs<T> {
 }
 
 impl<T> std::ops::DerefMut for TextGlyphs<T> {
-  fn deref_mut(&mut self) -> &mut Self::Target { &mut self.text }
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    self.invalidate_glyphs();
+    &mut self.text
+  }
 }
 
 #[cfg(test)]
@@ -346,7 +433,11 @@ mod tests {
   use ribir_core::{prelude::*, text::LineHeight};
   use ribir_types::Size;
 
-  use crate::{input::text_glyphs::ParagraphLayoutExt, prelude::CaretPosition};
+  use super::{ParagraphLayoutExt, TextGlyphLayoutContext, TextGlyphs};
+  use crate::{
+    input::{EditText, InputText},
+    prelude::CaretPosition,
+  };
 
   fn assert_caret(caret: CaretPosition, cluster: usize, position: Option<(usize, usize)>) {
     assert_eq!((caret.cluster, caret.position), (cluster, position));
@@ -371,6 +462,8 @@ mod tests {
         letter_spacing: Some(0.),
         line_height: Some(LineHeight::Px(16.)),
         brush: None,
+        background_brush: None,
+        background_radius: None,
         decoration: None,
       },
     ));
@@ -417,6 +510,75 @@ mod tests {
       TextWrap::NoWrap,
       Size::new(GlyphUnit::PIXELS_PER_EM as f32 * 20.0, GlyphUnit::PIXELS_PER_EM as f32 * 4.0),
     )
+  }
+
+  fn build_layout_ctx(size: Size, wrap: TextWrap) -> TextGlyphLayoutContext {
+    TextGlyphLayoutContext {
+      clamp: TextGlyphLayoutContext::normalize_clamp(BoxClamp::max_size(size)),
+      text_style: TextStyle {
+        font_size: 16.,
+        font_face: FontFace {
+          families: Box::new([FontFamily::Name("DejaVu Sans".into())]),
+          ..<_>::default()
+        },
+        letter_space: 0.,
+        line_height: LineHeight::Px(16.),
+        overflow: match wrap {
+          TextWrap::NoWrap => TextOverflow::Overflow,
+          TextWrap::Wrap => TextOverflow::AutoWrap,
+        },
+      },
+      text_align: TextAlign::Start,
+      text_decoration: None,
+    }
+  }
+
+  #[test]
+  fn relayout_after_text_update_uses_cached_layout_context() {
+    let size =
+      Size::new(GlyphUnit::PIXELS_PER_EM as f32 * 20.0, GlyphUnit::PIXELS_PER_EM as f32 * 4.0);
+    let layout_ctx = build_layout_ctx(size, TextWrap::NoWrap);
+    let mut text = TextGlyphs::new(CowArc::<str>::from("abc"));
+
+    let initial = text.force_layout_with_context(layout_ctx.clone());
+    assert!(text.glyphs.borrow().is_some());
+
+    *text.text_mut() = "abcdef".into();
+    assert!(text.glyphs.borrow().is_none());
+
+    let rebuilt = text.glyphs().unwrap().clone();
+    assert!(rebuilt.size().width > initial.size().width);
+    assert_eq!(rebuilt.size(), build_glyphs("abcdef", TextWrap::NoWrap, size).size());
+  }
+
+  #[test]
+  fn deref_mut_also_invalidates_glyph_cache() {
+    let size =
+      Size::new(GlyphUnit::PIXELS_PER_EM as f32 * 20.0, GlyphUnit::PIXELS_PER_EM as f32 * 4.0);
+    let layout_ctx = build_layout_ctx(size, TextWrap::NoWrap);
+    let mut text = TextGlyphs::new(InputText::new("abc"));
+
+    let _ = text.force_layout_with_context(layout_ctx);
+    assert!(text.glyphs.borrow().is_some());
+
+    text.insert_str(3, "def");
+    assert!(text.glyphs.borrow().is_none());
+
+    let rebuilt = text.glyphs().unwrap().clone();
+    assert_eq!(rebuilt.size(), build_glyphs("abcdef", TextWrap::NoWrap, size).size());
+  }
+
+  #[test]
+  fn layout_context_ignores_height_only_changes() {
+    let width = GlyphUnit::PIXELS_PER_EM as f32 * 5.0;
+    let short = build_layout_ctx(Size::new(width, GlyphUnit::PIXELS_PER_EM as f32), TextWrap::Wrap);
+    let tall =
+      build_layout_ctx(Size::new(width, GlyphUnit::PIXELS_PER_EM as f32 * 8.0), TextWrap::Wrap);
+
+    assert_eq!(short.clamp(), tall.clamp());
+    assert_eq!(short.clamp().max.width, width);
+    assert_eq!(short.clamp().min.height, 0.);
+    assert!(short.clamp().max.height.is_infinite());
   }
 
   fn build_wrapped_multiline_glyphs() -> ParagraphLayoutRef {

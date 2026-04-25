@@ -24,7 +24,6 @@ ribir_types = { workspace = true }
 ribir_text = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-usvg.workspace = true
 zerocopy = { workspace = true, optional = true, features = ["derive"] }
 derive_more = { workspace = true, features = ["add", "add_assign", "not", "mul"] }
 smallvec = { workspace = true, features = ["serde"] }
@@ -32,6 +31,10 @@ ahash.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom-v3.workspace = true
+usvg = { workspace = true, features = ["text"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+usvg = { workspace = true, features = ["text", "system-fonts", "memmap-fonts"] }
 
 [features]
 tessellation = ["lyon_tessellation", "zerocopy"]

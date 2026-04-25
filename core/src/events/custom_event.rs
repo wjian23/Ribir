@@ -35,6 +35,14 @@ impl<E: ?Sized> std::ops::DerefMut for CustomEvent<E> {
   fn deref_mut(&mut self) -> &mut Self::Target { &mut self.common }
 }
 
+impl<E: ?Sized> CustomEvent<E> {
+  #[inline]
+  pub fn map_to_global(&self, local_pos: Point) -> Point { self.common.map_to_global(local_pos) }
+
+  #[inline]
+  pub fn map_to_local(&self, global_pos: Point) -> Point { self.common.map_from_global(global_pos) }
+}
+
 impl<E: Sized + 'static> CustomEvent<E> {
   pub fn data(&self) -> &E { self.data.downcast_ref::<E>().unwrap() }
 
